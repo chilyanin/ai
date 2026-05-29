@@ -259,3 +259,148 @@ def is_on_auth_page(page) -> bool:
     except Exception:
         pass
     return False
+
+
+# --- Cloudflare Turnstile bypass via solvecaptcha.com -----------------------
+
+def _find_turnstile_sitekey(page) -> str | None:
+    """Locate the sitekey for a Cloudflare Turnstile widget on the page.
+
+    Two common shapes:
+      1. Explicit container: <div class="cf-turnstile" data-sitekey="0x...">
+      2. Turnstile iframe whose src includes ?sitekey=0x... or /turnstile/.../<sitekey>/
+    """
+    # Shape 1: data-sitekey on a container element.
+    try:
+        el = page.locator('[data-sitekey]').first
+        if el.count():
+            sk = el.get_attribute("data-sitekey")
+            if sk and sk.startswith("0x"):
+                return sk
+    except Exception:
+        pass
+
+    # Shape 2: iframe src — Cloudflare uses challenges.cloudflare.com.
+    try:
+        frames = page.locator(
+            'iframe[src*="challenges.cloudflare.com"], '
+            'iframe[src*="turnstile"]'
+        ).all()
+        for fr in frames:
+            try:
+                src = fr.get_attribute("src") or ""
+            except Exception:
+                continue
+            # ?sitekey=0x... query param form
+            m = re.search(r"[?&]k=(0x[0-9A-Za-z_-]+)", src) or re.search(
+                r"[?&]sitekey=(0x[0-9A-Za-z_-]+)", src
+            )
+            if m:
+                return m.group(1)
+            # Path-segment form: /turnstile/v0/<v>/<sitekey>/...
+            m = re.search(r"/turnstile/[^/]+/[^/]+/(0x[0-9A-Za-z_-]+)/", src)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+
+    # Last resort — scan the rendered HTML for a 0x...-shaped token. Noisy
+    # but better than giving up if the markup is non-standard.
+    try:
+        html = page.content()
+        m = re.search(r"\b(0x[0-9A-Fa-f]{20,})\b", html)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+def _inject_turnstile_token(page, token: str) -> bool:
+    """Inject `token` as the Turnstile response on the current page.
+
+    Tries the standard spots in order:
+      * <input name="cf-turnstile-response"> value
+      * <textarea name="cf-turnstile-response"> value
+      * window.tsCallback / window.turnstileCallback / a global named callback
+    Returns True if at least one injection succeeded.
+    """
+    injected = False
+    try:
+        result = page.evaluate(
+            """(token) => {
+                let touched = false;
+                const setOn = (sel) => {
+                    document.querySelectorAll(sel).forEach((el) => {
+                        const proto = el.tagName === 'TEXTAREA'
+                            ? HTMLTextAreaElement.prototype
+                            : HTMLInputElement.prototype;
+                        const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+                        setter.call(el, token);
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                        touched = true;
+                    });
+                };
+                setOn('input[name="cf-turnstile-response"]');
+                setOn('textarea[name="cf-turnstile-response"]');
+                // Try any registered global callbacks.
+                ['tsCallback', 'turnstileCallback', 'cfTurnstileCallback'].forEach((name) => {
+                    if (typeof window[name] === 'function') {
+                        try { window[name](token); touched = true; } catch (e) {}
+                    }
+                });
+                return touched;
+            }""",
+            token,
+        )
+        injected = bool(result)
+    except Exception:
+        pass
+    return injected
+
+
+def solve_cloudflare_turnstile(page) -> tuple[bool, str]:
+    """Detect a Cloudflare Turnstile challenge on `page` and solve it via
+    solvecaptcha.com (requires SOLVECAPTCHA_API_KEY in env).
+
+    Returns (success, detail). On success, the token has been injected into
+    the page; the caller still needs to verify the gate cleared (e.g. by
+    waiting for the real content to render). On failure, detail explains why.
+    """
+    api_key = os.environ.get("SOLVECAPTCHA_API_KEY", "").strip()
+    if not api_key:
+        return False, "no SOLVECAPTCHA_API_KEY in env"
+
+    try:
+        from solvecaptcha import Solvecaptcha
+    except ImportError:
+        return False, "solvecaptcha-python not installed"
+
+    sitekey = _find_turnstile_sitekey(page)
+    if not sitekey:
+        return False, "turnstile sitekey not found on page"
+
+    page_url = page.url
+
+    solver = Solvecaptcha(api_key)
+    try:
+        # solver.turnstile() polls solvecaptcha until the solve completes or
+        # the default timeout is hit. Returns a dict with at least 'code'
+        # (the token) per the library's docs.
+        result = solver.turnstile(sitekey=sitekey, url=page_url)
+    except Exception as e:  # noqa: BLE001 — library raises several types
+        return False, f"solvecaptcha api error: {type(e).__name__}: {e}"
+
+    token = None
+    if isinstance(result, dict):
+        token = result.get("code") or result.get("token")
+    elif isinstance(result, str):
+        token = result
+    if not token:
+        return False, f"no token in solvecaptcha response: {result!r}"
+
+    if not _inject_turnstile_token(page, token):
+        return False, "could not inject token into page"
+
+    return True, f"solved (sitekey={sitekey})"
