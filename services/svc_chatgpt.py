@@ -18,7 +18,12 @@ from __future__ import annotations
 import re
 import time
 
-from services._common import get_page, is_on_auth_page, submit_totp
+from services._common import (
+    get_page,
+    is_on_auth_page,
+    solve_cloudflare_turnstile,
+    submit_totp,
+)
 
 DEFAULT_TIMEOUT = 20_000
 SETTLE_TIMEOUT = 4_000
@@ -128,8 +133,8 @@ def _admin_shell_visible(page) -> bool:
 
 def _wait_for_admin_shell(page, quick_timeout_s: float = 8.0, slow_timeout_s: float = 180.0) -> bool:
     """Wait for the members admin to render. First a quick poll; if that
-    times out, assume a Cloudflare / human-challenge gate, prompt the
-    operator, and poll longer."""
+    times out, attempt to solve any Cloudflare Turnstile via solvecaptcha,
+    then fall back to a longer wait so a human can also intervene."""
     # Quick path: page is just slow to render.
     deadline = time.time() + quick_timeout_s
     while time.time() < deadline:
@@ -137,12 +142,31 @@ def _wait_for_admin_shell(page, quick_timeout_s: float = 8.0, slow_timeout_s: fl
             return True
         time.sleep(0.4)
 
-    # Slow path: assume a challenge is blocking. Surface the message and wait.
+    # Try to solve any Cloudflare Turnstile gate via solvecaptcha.
+    print("    members admin didn't render — attempting to solve Cloudflare Turnstile via solvecaptcha...")
+    ok, detail = solve_cloudflare_turnstile(page)
+    print(f"    solvecaptcha: {detail}")
+    if ok:
+        # Token was injected; give Cloudflare a moment to validate, then
+        # check whether the gate cleared. If the page didn't auto-reload,
+        # nudge it so the verified cookie/header takes effect.
+        time.sleep(2.0)
+        if not _admin_shell_visible(page):
+            try:
+                page.reload()
+                page.wait_for_load_state("networkidle", timeout=SETTLE_TIMEOUT)
+            except Exception:
+                pass
+        # Quick re-check after the reload.
+        for _ in range(15):
+            if _admin_shell_visible(page):
+                return True
+            time.sleep(0.5)
+
+    # Slow path: still gated. Let the operator solve it by hand.
     print(
-        "    members admin didn't render in "
-        f"{int(quick_timeout_s)}s — likely a Cloudflare 'Verify you are human' "
-        "or similar challenge. Solve it in the visible window; waiting up to "
-        f"{int(slow_timeout_s)}s..."
+        "    still gated — solve the Cloudflare challenge manually in the "
+        f"visible window; waiting up to {int(slow_timeout_s)}s..."
     )
     deadline = time.time() + slow_timeout_s
     while time.time() < deadline:
