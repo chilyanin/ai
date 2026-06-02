@@ -1,13 +1,14 @@
-2026/05/29-14:26:22.496 31a468 Reusing MANIFEST /Users/chilikin-a/Documents/claude/.browser_profile/Default/IndexedDB/https_www.figma.com_0.indexeddb.leveldb/MANIFEST-000001
-2026/05/29-14:26:22.496 31a468 Recovering log #94
-2026/05/29-14:26:22.497 31a468 Reusing old log /Users/chilikin-a/Documents/claude/.browser_profile/Default/IndexedDB/https_www.figma.com_0.indexeddb.leveldb/000094.log 
-2026/05/29-14:26:22.831 31a46b Level-0 table #99: started
-2026/05/29-14:26:22.835 31a46b Level-0 table #99: 1621 bytes OK
-2026/05/29-14:26:22.898 31a46b Delete type=0 #94
-2026/05/29-14:26:22.899 31a468 Manual compaction at level-0 from '\x00&\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00'\x00\x00\x00' @ 0 : 0; will stop at '\x00&\x00\x00\x05' @ 1046 : 1
-2026/05/29-14:26:22.899 31a468 Compacting 1@0 + 1@1 files
-2026/05/29-14:26:22.900 31a468 Generated table #100@0: 56 keys, 1441 bytes
-2026/05/29-14:26:22.900 31a468 Compacted 1@0 + 1@1 files => 1441 bytes
-2026/05/29-14:26:22.901 31a468 compacted to: files[ 0 1 1 0 0 0 0 ]
-2026/05/29-14:26:22.901 31a468 Delete type=2 #99
-2026/05/29-14:26:22.901 31a468 Manual compaction at level-0 from '\x00&\x00\x00\x05' @ 1046 : 1 .. '\x00'\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/06/02-17:38:46.335 480739 Reusing MANIFEST /Users/chilikin-a/Documents/claude/.browser_profile/Default/IndexedDB/https_www.figma.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/06/02-17:38:46.335 480739 Recovering log #110
+2026/06/02-17:38:46.335 480739 Reusing old log /Users/chilikin-a/Documents/claude/.browser_profile/Default/IndexedDB/https_www.figma.com_0.indexeddb.leveldb/000110.log 
+2026/06/02-17:38:46.335 480739 Delete type=2 #108
+2026/06/02-17:38:50.886 48073b Level-0 table #115: started
+2026/06/02-17:38:50.887 48073b Level-0 table #115: 646 bytes OK
+2026/06/02-17:38:50.889 48073b Delete type=0 #110
+2026/06/02-17:38:50.891 480738 Manual compaction at level-0 from '\x00+\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00,\x00\x00\x00' @ 0 : 0; will stop at '\x00+\x00\x00\x05' @ 1177 : 1
+2026/06/02-17:38:50.891 480738 Compacting 1@0 + 1@1 files
+2026/06/02-17:38:50.893 480738 Generated table #116@0: 60 keys, 1519 bytes
+2026/06/02-17:38:50.893 480738 Compacted 1@0 + 1@1 files => 1519 bytes
+2026/06/02-17:38:50.894 480738 compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/06/02-17:38:50.894 480738 Delete type=2 #115
+2026/06/02-17:38:50.895 480738 Manual compaction at level-0 from '\x00+\x00\x00\x05' @ 1177 : 1 .. '\x00,\x00\x00\x00' @ 0 : 0; will stop at (end)

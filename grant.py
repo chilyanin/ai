@@ -270,17 +270,21 @@ def main() -> int:
         finally:
             context.close()
 
+    machine_log = bool(os.environ.get("ACTION_LOG_STREAM"))
     print("\n=== summary ===")
     for row in plan:
         gid = row["task"]["gid"]
+        status = outcomes.get(gid, row["status"])
         print(
             f"  {gid:<18} "
             f"{row['service']:<18} "
             f"{row['target']:<40} "
-            f"{outcomes.get(gid, row['status'])}"
+            f"{status}"
         )
         for shot in shots_by_gid.get(gid, []):
             print(f"    screenshot: {shot}")
+        if machine_log:
+            print(f"RESULT|{gid}|{row['service']}|{row['target']}|{status}")
     return 0
 
 

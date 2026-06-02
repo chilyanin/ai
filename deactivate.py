@@ -25,10 +25,15 @@ from dotenv import load_dotenv
 
 from asana_client import (
     AsanaError,
+    complete_task,
     create_task_comment,
     fetch_tasks_due_on,
     upload_task_attachment,
 )
+
+# Outcomes that mean the user is no longer active in the service → the Asana
+# task can be marked complete.
+COMPLETABLE_OUTCOMES = ("deactivated", "already-deactivated")
 from services import _slug, env_key, get_handler
 
 TITLE_PREFIX = "Удалить из "
@@ -197,12 +202,16 @@ def print_plan(plan: list[dict], date: str) -> None:
             print(f"    • {row['target']:<45}  ({row['task']['gid']})")
 
 
-def _comment_after_outcome(row: dict, outcome: str, shots: list[str]) -> str | None:
-    """Upload proof screenshots and add an Asana task comment for final outcomes.
+def _comment_after_outcome(
+    row: dict, outcome: str, shots: list[str], complete: bool = True
+) -> str | None:
+    """Upload proof screenshots, comment, and (on success) mark the Asana task
+    complete.
 
-    Returns None on success, or a compact error string if commenting failed.
+    Returns None on success, or a compact error string if any Asana call failed.
+    `complete=False` disables marking the task done (--no-complete).
     """
-    if outcome not in ("deactivated", "user-not-found"):
+    if outcome not in ("deactivated", "already-deactivated", "user-not-found"):
         return None
     gid = row["task"]["gid"]
 
@@ -212,23 +221,31 @@ def _comment_after_outcome(row: dict, outcome: str, shots: list[str]) -> str | N
 
         shot_names = [Path(s).name for s in shots]
         if outcome == "deactivated":
-            lines = [
-                "Deactivation completed by automation.",
-                f"Service: {row['service']}",
-                f"User: {row['target']}",
-                f"Result: {outcome}",
-            ]
+            headline = "Deactivation completed by automation."
+        elif outcome == "already-deactivated":
+            headline = "User was already deactivated in the service."
         else:
-            lines = [
-                f"User not found in {row['service']}.",
-                f"User: {row['target']}",
-            ]
+            headline = f"User not found in {row['service']}."
+        lines = [
+            headline,
+            f"Service: {row['service']}",
+            f"User: {row['target']}",
+            f"Result: {outcome}",
+        ]
         if shot_names:
             lines.append("Screenshot(s) attached:")
             lines.extend(f"- {name}" for name in shot_names)
         else:
             lines.append("Screenshot: not available for this service.")
+
+        will_complete = complete and outcome in COMPLETABLE_OUTCOMES
+        if will_complete:
+            lines.append("Task marked complete by automation.")
+
         create_task_comment(gid, "\n".join(lines))
+
+        if will_complete:
+            complete_task(gid)
         return None
     except AsanaError as e:
         return str(e)
@@ -261,6 +278,11 @@ def main() -> int:
         "--include-completed",
         action="store_true",
         help="Include Asana tasks already marked complete (default: only open tasks)",
+    )
+    ap.add_argument(
+        "--no-complete",
+        action="store_true",
+        help="Do NOT mark Asana tasks complete on success (default: mark complete)",
     )
     args = ap.parse_args()
     if args.find_only:
@@ -378,7 +400,7 @@ def main() -> int:
                     outcomes[gid] = outcome
                     shots_by_gid[gid] = _capture_shots(context, shot_root, row, outcome)
                     comment_error = _comment_after_outcome(
-                        row, outcome, shots_by_gid[gid]
+                        row, outcome, shots_by_gid[gid], complete=not args.no_complete
                     )
                     if comment_error:
                         comment_errors[gid] = comment_error
@@ -396,6 +418,7 @@ def main() -> int:
             "comment_error": comment_errors.get(gid),
         })
 
+    machine_log = bool(os.environ.get("ACTION_LOG_STREAM"))
     print("\n=== summary ===")
     for r in results:
         print(
@@ -408,6 +431,15 @@ def main() -> int:
             print(f"    screenshot: {shot}")
         if r.get("comment_error"):
             print(f"    asana-comment-error: {r['comment_error']}")
+        if machine_log:
+            # Pipe-delimited, parsed by the monitor's action log. Kept off
+            # normal terminal runs so output stays clean. 6th field = first
+            # screenshot path (for the deactivation log).
+            shot = (r.get("shots") or [""])[0]
+            print(
+                f"RESULT|{r['task']['gid']}|{r['service']}|"
+                f"{r['target']}|{r['outcome']}|{shot}"
+            )
     return 0
 
 
