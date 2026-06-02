@@ -3,3 +3,5 @@ python-dotenv>=1.0
 playwright>=1.40
 playwright-stealth>=2.0
 solvecaptcha-python>=1.0
+flask>=3.0
+browser-use>=0.12.6

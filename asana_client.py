@@ -59,32 +59,74 @@ def _token() -> str:
     )
 
 
+def _force_refresh_token() -> str | None:
+    """Drop the cached bearer and obtain a fresh one via OAuth refresh.
+
+    OAuth bearer tokens expire (~1h); a long-running process must refresh on
+    401. Returns the new token, or None if a static ASANA_ACCESS_TOKEN is in
+    use (nothing to refresh) or no OAuth creds are configured.
+    """
+    global _cached_token
+    _cached_token = None
+    if os.environ.get("ASANA_ACCESS_TOKEN"):
+        return None
+    refreshed = _refresh_oauth_token()
+    if refreshed:
+        _cached_token = refreshed
+    return refreshed
+
+
 def _get(path: str, params: dict | None = None) -> Any:
-    r = requests.get(
-        f"{API_ROOT}{path}",
-        params=params,
-        headers={"Authorization": f"Bearer {_token()}"},
-        timeout=30,
-    )
-    if not r.ok:
-        raise AsanaError(f"{r.status_code} {r.reason} on {path}: {r.text[:300]}")
-    return r.json()["data"]
+    for attempt in range(2):
+        r = requests.get(
+            f"{API_ROOT}{path}",
+            params=params,
+            headers={"Authorization": f"Bearer {_token()}"},
+            timeout=30,
+        )
+        if r.status_code == 401 and attempt == 0 and _force_refresh_token():
+            continue  # token expired — refreshed, retry once
+        if not r.ok:
+            raise AsanaError(f"{r.status_code} {r.reason} on {path}: {r.text[:300]}")
+        return r.json()["data"]
 
 
 def _post_json(path: str, payload: dict, params: dict | None = None) -> Any:
-    r = requests.post(
-        f"{API_ROOT}{path}",
-        params=params,
-        json=payload,
-        headers={
-            "Authorization": f"Bearer {_token()}",
-            "Content-Type": "application/json",
-        },
-        timeout=30,
-    )
-    if not r.ok:
-        raise AsanaError(f"{r.status_code} {r.reason} on {path}: {r.text[:300]}")
-    return r.json()["data"]
+    for attempt in range(2):
+        r = requests.post(
+            f"{API_ROOT}{path}",
+            params=params,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {_token()}",
+                "Content-Type": "application/json",
+            },
+            timeout=30,
+        )
+        if r.status_code == 401 and attempt == 0 and _force_refresh_token():
+            continue
+        if not r.ok:
+            raise AsanaError(f"{r.status_code} {r.reason} on {path}: {r.text[:300]}")
+        return r.json()["data"]
+
+
+def _put_json(path: str, payload: dict, params: dict | None = None) -> Any:
+    for attempt in range(2):
+        r = requests.put(
+            f"{API_ROOT}{path}",
+            params=params,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {_token()}",
+                "Content-Type": "application/json",
+            },
+            timeout=30,
+        )
+        if r.status_code == 401 and attempt == 0 and _force_refresh_token():
+            continue
+        if not r.ok:
+            raise AsanaError(f"{r.status_code} {r.reason} on {path}: {r.text[:300]}")
+        return r.json()["data"]
 
 
 def create_task_comment(task_gid: str, text: str) -> dict:
@@ -92,22 +134,30 @@ def create_task_comment(task_gid: str, text: str) -> dict:
     return _post_json(f"/tasks/{task_gid}/stories", {"data": {"text": text}})
 
 
+def complete_task(task_gid: str) -> dict:
+    """Mark a task as completed."""
+    return _put_json(f"/tasks/{task_gid}", {"data": {"completed": True}})
+
+
 def upload_task_attachment(task_gid: str, path: str | Path) -> dict:
     """Upload a local file as an Asana attachment on a task."""
     p = Path(path)
-    with p.open("rb") as f:
-        r = requests.post(
-            f"{API_ROOT}/attachments",
-            headers={"Authorization": f"Bearer {_token()}"},
-            data={"parent": task_gid},
-            files={"file": (p.name, f, "image/png")},
-            timeout=60,
-        )
-    if not r.ok:
-        raise AsanaError(
-            f"{r.status_code} {r.reason} uploading {p.name}: {r.text[:300]}"
-        )
-    return r.json()["data"]
+    for attempt in range(2):
+        with p.open("rb") as f:
+            r = requests.post(
+                f"{API_ROOT}/attachments",
+                headers={"Authorization": f"Bearer {_token()}"},
+                data={"parent": task_gid},
+                files={"file": (p.name, f, "image/png")},
+                timeout=60,
+            )
+        if r.status_code == 401 and attempt == 0 and _force_refresh_token():
+            continue
+        if not r.ok:
+            raise AsanaError(
+                f"{r.status_code} {r.reason} uploading {p.name}: {r.text[:300]}"
+            )
+        return r.json()["data"]
 
 
 def me() -> dict:
@@ -153,4 +203,34 @@ def fetch_tasks_due_on(
         params["completed"] = "false"
     if text_filter:
         params["text"] = text_filter
+    return _get(f"/workspaces/{workspace_gid}/tasks/search", params=params)
+
+
+def fetch_task(gid: str) -> dict:
+    """Fetch a single task with the fields useful for triage (incl. notes)."""
+    return _get(
+        f"/tasks/{gid}",
+        params={"opt_fields": "name,notes,due_on,gid,permalink_url,completed"},
+    )
+
+
+def fetch_my_open_tasks(limit: int = 100) -> list[dict]:
+    """Return up to `limit` open tasks assigned to the current user, ordered
+    by most-recently-modified first.
+
+    Used by the monitor service to take a periodic snapshot of "MY TASKS"
+    for bucket classification. Asana's `/workspaces/{gid}/tasks/search`
+    endpoint caps the page at 100; we don't paginate further on purpose —
+    if you have >100 open tasks the monitor is a triage tool anyway.
+    """
+    current = me()
+    workspace_gid = _resolve_workspace_gid()
+    params: dict[str, Any] = {
+        "assignee.any": current["gid"],
+        "completed": "false",
+        "sort_by": "modified_at",
+        "sort_ascending": "false",
+        "opt_fields": "name,due_on,gid,permalink_url,completed,modified_at",
+        "limit": min(max(int(limit), 1), 100),
+    }
     return _get(f"/workspaces/{workspace_gid}/tasks/search", params=params)
