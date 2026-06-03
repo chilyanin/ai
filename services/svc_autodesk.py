@@ -4,6 +4,15 @@ Auth: staged sign-in — email → Next → password → Sign in → TOTP → ad
 The TOTP code is generated from AUTODESK_2FA_SECRET (same TOTP module as
 the Figma plugin).
 
+CAPTCHA note: the sign-in page (signin.autodesk.com) is gated by *invisible
+hCaptcha* (sitekey 6670fa76-…). In practice it passes silently — across many
+fresh-profile/headless/bot-UA attempts it never escalated to a visible
+challenge for this account. It is NOT auto-solved: solvecaptcha.com (our only
+configured solver) does not support hCaptcha — its API rejects method=hcaptcha
+with ERROR_METHOD_CALL. If a visible challenge ever appears, the operator
+solves it by hand in the visible browser within the wait window below. To
+automate it, wire in an hCaptcha-capable provider (2captcha / CapSolver / etc.).
+
 Status:
   This plugin gets to a logged-in state and, when --find-only is set, stops
   there with a screenshot. The path to the specific user-management screen
@@ -89,9 +98,11 @@ def _login(page, creds: dict) -> bool:
         'input[type="email"], input[name="email"]'
     )
 
-    # Stage 1: email. Wait long here — Autodesk often gates this behind a
-    # CAPTCHA we will not solve programmatically. With a visible browser the
-    # operator can solve it by hand within the wait window.
+    # Stage 1: email. Wait long here — Autodesk gates the email→password
+    # transition behind invisible hCaptcha, which we do not solve
+    # programmatically (see the CAPTCHA note in the module docstring). With a
+    # visible browser the operator can solve any challenge by hand within the
+    # wait window.
     print(
         "    [autodesk] if a CAPTCHA appears in the browser window, solve it "
         f"manually within {HUMAN_WAIT_MS // 1000}s"

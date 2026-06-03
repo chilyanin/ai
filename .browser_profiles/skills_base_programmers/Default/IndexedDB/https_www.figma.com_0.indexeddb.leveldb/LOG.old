@@ -1,0 +1,13 @@
+2026/06/02-17:18:05.241 4772ae Reusing MANIFEST /Users/chilikin-a/Documents/claude/.browser_profile/Default/IndexedDB/https_www.figma.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/06/02-17:18:05.241 4772ae Recovering log #106
+2026/06/02-17:18:05.241 4772ae Reusing old log /Users/chilikin-a/Documents/claude/.browser_profile/Default/IndexedDB/https_www.figma.com_0.indexeddb.leveldb/000106.log 
+2026/06/02-17:18:09.870 4772b1 Level-0 table #111: started
+2026/06/02-17:18:09.872 4772b1 Level-0 table #111: 1891 bytes OK
+2026/06/02-17:18:09.877 4772b1 Delete type=0 #106
+2026/06/02-17:18:09.878 4772ae Manual compaction at level-0 from '\x00*\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00+\x00\x00\x00' @ 0 : 0; will stop at '\x00*\x00\x00\x05' @ 1158 : 1
+2026/06/02-17:18:09.878 4772ae Compacting 1@0 + 1@1 files
+2026/06/02-17:18:09.880 4772ae Generated table #112@0: 60 keys, 1519 bytes
+2026/06/02-17:18:09.880 4772ae Compacted 1@0 + 1@1 files => 1519 bytes
+2026/06/02-17:18:09.882 4772ae compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/06/02-17:18:09.882 4772ae Delete type=2 #111
+2026/06/02-17:18:09.882 4772ae Manual compaction at level-0 from '\x00*\x00\x00\x05' @ 1158 : 1 .. '\x00+\x00\x00\x00' @ 0 : 0; will stop at (end)

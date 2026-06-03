@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import signal
 import sys
 import threading
 import time
@@ -976,16 +975,17 @@ def api_triage():
 
 @app.route("/api/stop", methods=["POST"])
 def api_stop():
-    shutdown = request.environ.get("werkzeug.server.shutdown")
-
+    # Werkzeug ≥2.1 removed `werkzeug.server.shutdown`, and a SIGINT to a
+    # backgrounded dev server isn't reliably honored — so after flushing this
+    # response we stop the scheduler and hard-exit the process.
     def stop_later() -> None:
-        time.sleep(0.35)
+        time.sleep(0.4)  # let the HTTP response flush to the client
         if _scheduler is not None:
-            _scheduler.stop()
-        if callable(shutdown):
-            shutdown()
-        else:
-            os.kill(os.getpid(), signal.SIGINT)
+            try:
+                _scheduler.stop()
+            except Exception:
+                pass
+        os._exit(0)
 
     threading.Thread(target=stop_later, daemon=True, name="stop-service").start()
     return jsonify({"status": "stopping"})
