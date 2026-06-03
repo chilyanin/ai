@@ -42,16 +42,21 @@ def main() -> int:
         return 2
 
     from playwright.sync_api import sync_playwright
+    from services._common import service_profile_dir
 
-    user_data_dir = Path(".browser_profile").resolve()
-    user_data_dir.mkdir(parents=True, exist_ok=True)
+    # Prime the SERVICE-SPECIFIC persistent profile so deactivate.py / grant.py
+    # reuse it. The slug must match the runner's key, i.e. the lowercased
+    # service name with non-alphanumerics → '_' (e.g. 'slack_workspace_redbark2',
+    # 'skills_base', 'maxon', 'figma').
+    user_data_dir = service_profile_dir(args.service.lower().replace("-", "_"))
 
     print(f"opening {url} (visible window) — sign in manually if needed.")
+    print(f"profile: {user_data_dir}")
     print(f"window will stay open for up to {args.wait}s; press Enter here to close early.")
 
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
-            user_data_dir=str(user_data_dir),
+            user_data_dir=user_data_dir,
             headless=False,
         )
         try:
@@ -68,7 +73,7 @@ def main() -> int:
                 # Fallback: just sleep.
                 import time as _t
                 _t.sleep(args.wait)
-            print("closing browser; cookies saved to .browser_profile/")
+            print(f"closing browser; cookies saved to {user_data_dir}")
         finally:
             context.close()
     return 0

@@ -35,6 +35,7 @@ from asana_client import (
 # task can be marked complete.
 COMPLETABLE_OUTCOMES = ("deactivated", "already-deactivated")
 from services import _slug, env_key, get_handler
+from services._common import service_profile_dir
 
 TITLE_PREFIX = "Удалить из "
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
@@ -374,20 +375,20 @@ def main() -> int:
             continue
         ready_by_service.setdefault(row["service"], []).append(row)
 
-    user_data_dir = Path(".browser_profile").resolve()
-    user_data_dir.mkdir(parents=True, exist_ok=True)
-
     with sync_playwright() as p:
-        # Persistent context — cookies, localStorage, and CAPTCHA-trust survive
-        # across runs. Solve a CAPTCHA once by hand in the visible window and
-        # subsequent runs typically won't see it again.
-        context = p.chromium.launch_persistent_context(
-            user_data_dir=str(user_data_dir),
-            headless=args.headless,
-        )
-        try:
-            for service, rows in ready_by_service.items():
-                handler = get_handler(service)
+        # Each service runs in its OWN persistent context (separate window +
+        # cookie jar under .browser_profiles/<slug>), opened and closed one at
+        # a time. This isolates services from each other (no leftover modal /
+        # cookie bleed) while keeping per-service sessions persistent. Profiles
+        # are seeded from the legacy shared .browser_profile on first use.
+        for service, rows in ready_by_service.items():
+            slug = _slug(service).removeprefix("svc_") or "unknown"
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=service_profile_dir(slug),
+                headless=args.headless,
+            )
+            handler = get_handler(service)
+            try:
                 for row in rows:
                     gid = row["task"]["gid"]
                     target = row["target"]
@@ -404,8 +405,8 @@ def main() -> int:
                     )
                     if comment_error:
                         comment_errors[gid] = comment_error
-        finally:
-            context.close()
+            finally:
+                context.close()
 
     # Reassemble results in original plan order.
     results: list[dict[str, Any]] = []

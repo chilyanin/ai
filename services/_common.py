@@ -3,9 +3,52 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import time
+from pathlib import Path
 
 from totp import generate as totp_generate, seconds_remaining
+
+# ---------------------------------------------------------------------------
+# Per-service browser profiles
+# ---------------------------------------------------------------------------
+# Each service gets its own persistent Playwright profile (its own context /
+# window / cookie jar) under .browser_profiles/<slug>. On first use a service
+# profile is seeded from the legacy shared .browser_profile so previously
+# primed logins (Slack, ChatGPT, Skills Base, …) carry over automatically.
+LEGACY_PROFILE = Path(".browser_profile")
+PROFILES_ROOT = Path(".browser_profiles")
+
+# Chromium dirs/files that must NOT be copied when seeding: caches (huge, no
+# session value) and Singleton lock files (would block the new context).
+_SEED_IGNORE = shutil.ignore_patterns(
+    "Singleton*", "*.lock", "lockfile",
+    "Cache", "Code Cache", "GPUCache", "DawnCache", "DawnGraphiteCache",
+    "ShaderCache", "GrShaderCache", "Service Worker", "component_crx_cache",
+)
+
+
+def service_profile_dir(service_slug: str) -> str:
+    """Return the per-service persistent-profile directory (absolute path).
+
+    Creates it on first use, seeding from the legacy shared profile if present
+    so existing sessions are preserved without re-priming.
+    """
+    slug = service_slug or "unknown"
+    dest = (PROFILES_ROOT / slug).resolve()
+    if dest.exists():
+        return str(dest)
+
+    PROFILES_ROOT.mkdir(parents=True, exist_ok=True)
+    legacy = LEGACY_PROFILE.resolve()
+    if legacy.is_dir() and (legacy / "Default").exists():
+        try:
+            shutil.copytree(legacy, dest, ignore=_SEED_IGNORE)
+        except Exception:
+            dest.mkdir(parents=True, exist_ok=True)
+    else:
+        dest.mkdir(parents=True, exist_ok=True)
+    return str(dest)
 
 OTP_INPUT_SELECTORS = (
     'input[autocomplete="one-time-code"], '
@@ -404,3 +447,9 @@ def solve_cloudflare_turnstile(page) -> tuple[bool, str]:
         return False, "could not inject token into page"
 
     return True, f"solved (sitekey={sitekey})"
+
+# NOTE: No hCaptcha solver lives here on purpose. Autodesk's sign-in uses
+# invisible hCaptcha, but solvecaptcha.com (our configured solver) does not
+# support hCaptcha — its API rejects method=hcaptcha with ERROR_METHOD_CALL.
+# Adding an hCaptcha solver would require a different provider (2captcha,
+# CapSolver, Anti-Captcha, …). See services/svc_autodesk.py for context.

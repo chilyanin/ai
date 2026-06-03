@@ -11,12 +11,20 @@ Required env:
     PLASTIC_SCM_PASSWORD     Unity-ID password
     PLASTIC_SCM_2FA_SECRET   base32 TOTP secret (or otpauth:// URL)
 
+Deactivation flow:
+    After locating the user row, click its red trash button
+    (button.btn-delete[data-email=…]). dashboard.min.js pops a native
+    window.confirm("… remove user '<email>'?") and, on accept, fires
+    DELETE /api/cloud/organizations/<org>/users/<email>, then removes the
+    row from the DOM on success. We accept the confirm via a one-shot dialog
+    handler and verify the row detached.
+
 Status:
     "found"                          — find-only located the user row
     "user-not-found"                 — search returned no match
-    "deactivated"                    — destructive flow not yet wired (see TODO)
-    "needs-confirmation: …"          — paths waiting on operator-confirmed UI
-    "failed: <reason>"               — auth or navigation failure
+    "deactivated"                    — row removed after confirmed delete
+    "needs-confirmation: row-still-present" — clicked + confirmed but row lingered
+    "failed: <reason>"               — auth, navigation, or delete failure
 """
 from __future__ import annotations
 
@@ -182,7 +190,61 @@ def deactivate(context, creds: dict, target_user: str) -> str:
     if status != "found":
         return status
 
-    # TODO(plastic-flow): once operator confirms, click the row's deactivate
-    # action (likely a kebab → "Remove" or per-row "Delete" button), confirm
-    # the dialog, and verify the row disappeared.
-    return "needs-confirmation: plastic-deactivate-flow-not-implemented"
+    return _remove_user(page, target_user)
+
+
+def _remove_user(page, target_user: str) -> str:
+    """Click the row's red trash button and confirm removal.
+
+    The per-row delete button (``button.btn-delete[data-email=…]``) is wired in
+    dashboard.min.js to:
+      1. pop a native ``window.confirm('… remove user "<email>"?')``
+      2. on accept, ``$.ajax DELETE /api/cloud/organizations/<org>/users/<email>``
+      3. on success, remove the ``.user-row`` from the DOM
+      4. on failure, reveal an inline ``.alert-danger`` inside the row.
+
+    So we register a one-shot dialog handler that accepts only the matching
+    "remove user" confirm, click the button, then verify the row detached.
+    """
+    # data-email holds the exact registered address; match case-insensitively
+    # in case the Asana title differs in case from what Plastic stored.
+    btn = page.locator(
+        f'div.user-row button.btn-delete[data-email="{target_user}" i]'
+    ).first
+    if btn.count() == 0:
+        return "failed: delete-button-not-found"
+
+    # Accept the native confirm — but only if it's the expected remove-user
+    # prompt for this user, so a stray dialog can never trigger a deletion.
+    def _on_dialog(dialog) -> None:
+        msg = (getattr(dialog, "message", "") or "").lower()
+        if "remove user" in msg and target_user.lower() in msg:
+            dialog.accept()
+        else:
+            dialog.dismiss()
+
+    page.once("dialog", _on_dialog)
+
+    try:
+        btn.scroll_into_view_if_needed()
+        btn.click()
+    except Exception as e:  # noqa: BLE001
+        return f"failed: delete-click ({type(e).__name__})"
+
+    # Success = the row is removed from the DOM by the AJAX success callback.
+    row = page.locator(f'div.user-row:has-text("{target_user}")').first
+    try:
+        row.wait_for(state="detached", timeout=10_000)
+        return "deactivated"
+    except Exception:
+        pass
+
+    # Still present — surface the inline error if the API rejected the delete.
+    try:
+        err = page.locator("div.user-row .alert-danger:not(.d-none)").first
+        if err.count():
+            detail = (err.inner_text() or "").strip()[:120]
+            return f"failed: delete-rejected ({detail})" if detail else "failed: delete-rejected"
+    except Exception:
+        pass
+    return "needs-confirmation: row-still-present"

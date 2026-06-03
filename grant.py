@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 from asana_client import AsanaError, _get, fetch_tasks_due_on
 from deactivate import load_creds, _capture_shots
 from services import _slug, env_key
+from services._common import service_profile_dir
 
 TITLE_PREFIX = "Заявка на лицензию/доступ "
 TITLE_SUFFIX_RE = re.compile(r"\s*/\s*Purchase Request\s*$", re.I)
@@ -230,9 +231,6 @@ def main() -> int:
     shot_root = Path(args.screenshot_dir) / date_label / "grant"
     shot_root.mkdir(parents=True, exist_ok=True)
 
-    user_data_dir = Path(".browser_profile").resolve()
-    user_data_dir.mkdir(parents=True, exist_ok=True)
-
     outcomes: dict[str, str] = {}
     shots_by_gid: dict[str, list[str]] = {}
 
@@ -241,14 +239,17 @@ def main() -> int:
         by_service.setdefault(row["service"], []).append(row)
 
     with Stealth().use_sync(sync_playwright()) as p:
-        context = p.chromium.launch_persistent_context(
-            user_data_dir=str(user_data_dir),
-            headless=args.headless,
-        )
-        try:
-            for service, rows in by_service.items():
-                module = importlib.import_module(f"services.{_slug(service)}")
-                handler = module.invite
+        # One persistent context per service (separate window + cookie jar
+        # under .browser_profiles/<slug>), opened/closed sequentially.
+        for service, rows in by_service.items():
+            slug = _slug(service).removeprefix("svc_") or "unknown"
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=service_profile_dir(slug),
+                headless=args.headless,
+            )
+            module = importlib.import_module(f"services.{_slug(service)}")
+            handler = module.invite
+            try:
                 for row in rows:
                     gid = row["task"]["gid"]
                     target = row["target"]
@@ -267,8 +268,8 @@ def main() -> int:
                         outcome = f"failed: {type(e).__name__}: {e}"
                     outcomes[gid] = outcome
                     shots_by_gid[gid] = _capture_shots(context, shot_root, row, outcome)
-        finally:
-            context.close()
+            finally:
+                context.close()
 
     machine_log = bool(os.environ.get("ACTION_LOG_STREAM"))
     print("\n=== summary ===")
