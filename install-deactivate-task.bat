@@ -20,9 +20,15 @@ if not exist "%RUNNER%" (
   exit /b 1
 )
 
-REM /RL LIMITED + onlogon-style desktop session: deactivate.py drives a visible
-REM Chromium (Playwright) for captcha/2FA, so it needs your interactive session.
-schtasks /Create /TN "AsanaDeactivateFindOnly" /SC DAILY /ST 20:00 /RL LIMITED /F ^
+REM Run whether logged on or not: /RU + /RP store the account credentials so the
+REM task fires in Session 0 with no desktop. The runner uses --headless to suit
+REM that. The machine must be powered on (not asleep) at 20:00, and every
+REM service session in .browser_profiles\ must still be valid - an expired
+REM login/2FA/captcha has no desktop to interact with and will hang.
+REM /RP * prompts for the password (stored encrypted); /RL HIGHEST avoids UAC
+REM truncation. Replace %USERDOMAIN%\%USERNAME% if a different account is wanted.
+schtasks /Create /TN "AsanaDeactivateFindOnly" /SC DAILY /ST 20:00 ^
+  /RU "%USERDOMAIN%\%USERNAME%" /RP * /RL HIGHEST /F ^
   /TR "\"%RUNNER%\""
 
 if errorlevel 1 (

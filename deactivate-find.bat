@@ -17,5 +17,8 @@ if not exist "%PY%" (
 REM Compute today's date as YYYY-MM-DD (locale-independent via PowerShell).
 for /f %%d in ('powershell -NoProfile -Command "(Get-Date).ToString('yyyy-MM-dd')"') do set "TODAY=%%d"
 
-echo ===== %DATE% %TIME% : --date %TODAY% --yes --find-only =====>> "deactivate-find.log"
-"%PY%" "%SCRIPT%" --date %TODAY% --yes --find-only >> "deactivate-find.log" 2>&1
+REM --headless so it works in a non-interactive (Session 0) scheduled run.
+REM NOTE: this requires every service's saved session in .browser_profiles\
+REM to still be valid; an expired login/2FA/captcha will hang with no desktop.
+echo ===== %DATE% %TIME% : --date %TODAY% --yes --find-only --headless =====>> "deactivate-find.log"
+"%PY%" "%SCRIPT%" --date %TODAY% --yes --find-only --headless >> "deactivate-find.log" 2>&1
