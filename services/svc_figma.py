@@ -135,6 +135,90 @@ def _fill_dialog_name_input(dialog, display_name: str) -> bool:
         return True
 
 
+def _understand_checkbox_checked(dialog) -> bool:
+    """True if the 'I understand…' confirmation box is currently ticked."""
+    cb = dialog.locator('input[type="checkbox"]').first
+    if cb.count():
+        try:
+            return cb.is_checked()
+        except Exception:
+            pass
+    rc = dialog.locator('[role="checkbox"]').first
+    if rc.count():
+        try:
+            return rc.get_attribute("aria-checked") == "true"
+        except Exception:
+            pass
+    return False
+
+
+def _check_understand_box(dialog) -> bool:
+    """Tick the remove dialog's 'I understand that this action can't be undone'
+    checkbox. Figma renders a styled checkbox whose native <input> is visually
+    hidden, so Playwright's .check()/.click() on the input fails actionability.
+    Try the input with force, then the clickable label/text, then an ARIA
+    checkbox. Returns True only once the box is observably checked."""
+    if _understand_checkbox_checked(dialog):
+        return True
+
+    # Strategy 1 — native checkbox, forced past the visually-hidden input.
+    cb = dialog.locator('input[type="checkbox"]').first
+    if cb.count():
+        for action in ("check", "click"):
+            try:
+                getattr(cb, action)(force=True, timeout=2_000)
+            except Exception:
+                continue
+            if _understand_checkbox_checked(dialog):
+                return True
+
+    # Strategy 2 — click the visible label/row carrying the confirmation text.
+    label = dialog.get_by_text(
+        re.compile(r"I understand that this action", re.I)
+    ).first
+    if label.count():
+        try:
+            label.click(timeout=2_000)
+        except Exception:
+            pass
+        if _understand_checkbox_checked(dialog):
+            return True
+
+    # Strategy 3 — ARIA checkbox role.
+    rc = dialog.locator('[role="checkbox"]').first
+    if rc.count():
+        try:
+            rc.click(timeout=2_000)
+        except Exception:
+            pass
+
+    return _understand_checkbox_checked(dialog)
+
+
+def _wait_remove_dialog_ready(dialog, timeout_s: float = 12.0) -> bool:
+    """The remove-confirmation dialog opens with just a title and a loading
+    spinner, then fetches its body (warning text + 'I understand' checkbox, or
+    the name input) asynchronously. Reading the form before that arrives sees an
+    empty body. Poll until a confirmation control has rendered. Returns True if
+    one appeared, False on timeout (caller still proceeds defensively)."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            if dialog.locator(
+                'input[type="checkbox"], [role="checkbox"], '
+                'input[type="text"]:visible, textarea:visible'
+            ).count():
+                return True
+            if re.search(
+                r"I understand that this action", dialog.inner_text(), re.I
+            ):
+                return True
+        except Exception:
+            pass
+        time.sleep(0.3)
+    return False
+
+
 def _dismiss_in_app_overlay(page) -> bool:
     """Close any Figma in-app survey/feedback overlay (curator-portal-target).
     These overlays can pop up at any time and intercept pointer events. Returns
@@ -635,6 +719,24 @@ def invite(context, creds: dict, target_user: str, role: str = "full") -> str:
         return "needs-confirmation: dialog-still-open"
 
 
+_REMOVE_BTN_ENABLED_JS = (
+    "() => Array.from(document.querySelectorAll('[role=dialog]'))"
+    "  .filter(d => d.offsetWidth || d.offsetHeight || d.getClientRects().length)"
+    "  .flatMap(d => Array.from(d.querySelectorAll('button')))"
+    "  .some(b => /^remove(\\s+user)?\\b/i.test(b.textContent.trim())"
+    "    && !b.disabled && b.getAttribute('aria-disabled') !== 'true')"
+)
+
+
+def _wait_remove_enabled(page, timeout: int) -> bool:
+    """True once a visible dialog has an enabled 'Remove'/'Remove user' button."""
+    try:
+        page.wait_for_function(_REMOVE_BTN_ENABLED_JS, timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 def deactivate(context, creds: dict, target_user: str) -> str:
     # Use a Figma-dedicated page on the shared persistent context so
     # screenshots and state aren't disturbed by other services' plugins.
@@ -772,6 +874,11 @@ def deactivate(context, creds: dict, target_user: str) -> str:
     except Exception:
         return "needs-confirmation: no-dialog"
 
+    # The dialog renders its title immediately but loads the body (warning text
+    # + 'I understand' checkbox / name input) behind a spinner. Wait for that
+    # before reading the form, otherwise we interact with an empty dialog.
+    _wait_remove_dialog_ready(dialog)
+
     # Read the dialog text/title to extract the display name Figma wants typed
     # into the confirmation field. Current dialog text starts with:
     # "Remove <Name> from <Org>?"
@@ -804,60 +911,39 @@ def deactivate(context, creds: dict, target_user: str) -> str:
         or re.search(r"\bRemove\s+(.+?)\s+from\s+", title_text, re.I)
     )
 
-    # New form: text input asking for the user's name.
+    # Two confirmation forms exist. Newer: a text input asking the operator to
+    # type the user's name. Current (as of 2026-06): a checkbox "I understand
+    # that this action can't be undone". Both dialogs carry a "Remove <Name>
+    # from <Org>?" title, so a matching `name_match` is NOT enough to pick the
+    # text-input form — gate on the input actually being present.
     name_input = dialog.locator(
         'input[type="text"]:visible, input:not([type]):visible, '
         'input[type="search"]:visible, textarea:visible'
     )
-    if name_match and name_input.count():
+    is_name_form = bool(name_match and name_input.count())
+
+    if is_name_form:
         display_name = re.sub(r"\s+", " ", name_match.group(1)).strip()
         if not _fill_dialog_name_input(dialog, display_name):
             return "needs-confirmation: name-input-fill-failed"
     else:
-        # Old form: checkbox "I understand that this action can't be undone".
-        checkbox = dialog.locator('input[type="checkbox"]').first
-        if checkbox.count():
-            try:
-                checkbox.check()
-            except Exception:
-                try:
-                    checkbox.click()
-                except Exception:
-                    pass
+        # Checkbox form: tick "I understand that this action can't be undone".
+        if not _check_understand_box(dialog):
+            return "needs-confirmation: understand-checkbox-failed"
 
-    # Wait for the destructive button to become enabled. It's labelled
-    # "Remove user" in the new dialog and "Remove" in the old one.
-    try:
-        page.wait_for_function(
-            "() => Array.from(document.querySelectorAll('[role=dialog]'))"
-            "  .filter(d => d.offsetWidth || d.offsetHeight || d.getClientRects().length)"
-            "  .flatMap(d => Array.from(d.querySelectorAll('button')))"
-            "  .some(b => /^remove(\\s+user)?\\b/i.test(b.textContent.trim())"
-            "    && !b.disabled && b.getAttribute('aria-disabled') !== 'true')",
-            timeout=5_000,
-        )
-    except Exception:
-        if name_match:
-            display_name = re.sub(r"\s+", " ", name_match.group(1)).strip()
-            # One last pass against the visible dialog. This guards against
-            # Figma leaving a stale hidden dialog in the DOM while the visible
-            # one is the real active confirmation.
-            if _fill_dialog_name_input(dialog, display_name):
-                try:
-                    page.wait_for_function(
-                        "() => Array.from(document.querySelectorAll('[role=dialog]'))"
-                        "  .filter(d => d.offsetWidth || d.offsetHeight || d.getClientRects().length)"
-                        "  .flatMap(d => Array.from(d.querySelectorAll('button')))"
-                        "  .some(b => /^remove(\\s+user)?\\b/i.test(b.textContent.trim())"
-                        "    && !b.disabled && b.getAttribute('aria-disabled') !== 'true')",
-                        timeout=3_000,
-                    )
-                except Exception:
-                    return f"needs-confirmation: remove-button-not-enabled ({display_name})"
-            else:
-                return f"needs-confirmation: remove-button-not-enabled ({display_name})"
+    # Wait for the destructive button to become enabled ("Remove user" /
+    # "Remove"). On timeout, retry the same confirmation gesture against the
+    # currently-visible dialog — guards against Figma leaving a stale hidden
+    # dialog in the DOM while the visible one is the real active confirmation.
+    if not _wait_remove_enabled(page, 5_000):
+        if is_name_form:
+            detail = re.sub(r"\s+", " ", name_match.group(1)).strip()
+            retried = _fill_dialog_name_input(dialog, detail)
         else:
-            return "needs-confirmation: remove-button-not-enabled"
+            detail = "checkbox"
+            retried = _check_understand_box(dialog)
+        if not (retried and _wait_remove_enabled(page, 3_000)):
+            return f"needs-confirmation: remove-button-not-enabled ({detail})"
 
     confirm = dialog.get_by_role(
         "button", name=re.compile(r"^Remove(\s+user)?\b", re.I)

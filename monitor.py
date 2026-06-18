@@ -263,6 +263,10 @@ DASHBOARD_HTML = r"""
       </div>
     </div>
     <div class="actions">
+      <select id="action-service" class="date-input"
+              title="Limit Onboarding/Offboarding to a single service (default: all services)">
+        <option value="">All services</option>
+      </select>
       <label class="chk" title="Preview only — no destructive action (offboarding: find-only; onboarding: dry-run)">
         <input type="checkbox" id="action-preview" checked> preview
       </label>
@@ -509,6 +513,21 @@ function selectedDate() {
 function selectedInclCompleted() {
   return document.getElementById('include-completed').checked;
 }
+function selectedService() {
+  return document.getElementById('action-service').value || '';
+}
+
+async function loadServices() {
+  try {
+    const { services } = await fetchJSON('/api/services');
+    const sel = document.getElementById('action-service');
+    for (const s of services) {
+      const o = document.createElement('option');
+      o.value = s.value; o.textContent = s.label;
+      sel.appendChild(o);
+    }
+  } catch (e) { /* leave just the "All services" default */ }
+}
 
 async function refresh() {
   try {
@@ -635,25 +654,29 @@ async function runAction(kind) {
   const m = ACTION_META[kind];
   const date = selectedDate();
   const preview = document.getElementById('action-preview').checked;
+  const service = selectedService();
+  const scope = service ? `service "${service}"` : 'ALL services';
   if (!preview) {
     const verb = kind === 'grant'
       ? `grant access/licenses for ${date}`
       : `deactivate users for ${date}`;
-    if (!confirm(`Run REAL ${m.label} — ${verb}?\n\nThis performs live changes in the connected services. ` +
+    if (!confirm(`Run REAL ${m.label} — ${verb} (${scope})?\n\nThis performs live changes in the connected services. ` +
                  `Uncheck "preview" only when you're ready.`)) {
       return;
     }
   }
   setActionButtons(true, kind, preview);
   document.getElementById('action-title').textContent =
-    `${m.label} — ${date} ${preview ? '(preview)' : '(LIVE)'}`;
+    `${m.label} — ${date} · ${service || 'all services'} ${preview ? '(preview)' : '(LIVE)'}`;
   document.getElementById('action-output').textContent = 'starting…';
   document.getElementById('action-modal').hidden = false;
   try {
+    const body = { date, preview };
+    if (service) body.services = [service];
     const r = await fetch(m.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date, preview })
+      body: JSON.stringify(body)
     });
     if (!r.ok && r.status !== 409) {
       const j = await r.json().catch(() => ({}));
@@ -675,6 +698,7 @@ document.getElementById('action-close').addEventListener('click', () => {
   document.getElementById('action-modal').hidden = true;
 });
 
+loadServices();
 refresh();
 </script>
 </body>
@@ -745,6 +769,24 @@ def api_by_date():
 def api_run():
     result = analyze_once()
     return jsonify(result)
+
+
+@app.route("/api/services")
+def api_services():
+    """List available service handlers (services/svc_*.py) for the action
+    service filter. `value` is what gets passed to deactivate.py/grant.py
+    --service (a case-insensitive substring matched against the task's service
+    name), so underscores are turned back into spaces to match Asana names
+    like "Plastic SCM"."""
+    svc_dir = HERE / "services"
+    services = []
+    for p in sorted(svc_dir.glob("svc_*.py")):
+        slug = p.stem[len("svc_"):]
+        if not slug:
+            continue
+        value = slug.replace("_", " ")
+        services.append({"value": value, "label": value.title()})
+    return jsonify({"services": services})
 
 
 HERE = Path(__file__).resolve().parent

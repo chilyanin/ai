@@ -193,31 +193,70 @@ def _click_remove_from_org(page, row) -> bool:
     return True
 
 
-def _confirm_remove(page) -> str | None:
+def _find_visible(locator):
+    """Return the first visible match of `locator`, or None.
+
+    We can't rely on `.first`/`.last`: Unity's modal root leaves hidden nodes
+    (matching [role="dialog"] / [class*="modal"]) permanently in the DOM, so
+    a positional pick can resolve to a hidden element and stall wait_for().
+    """
     try:
-        dialog = page.locator('[role="dialog"], .modal, [class*="modal" i]').first
-        dialog.wait_for(timeout=8_000)
+        count = locator.count()
     except Exception:
+        return None
+    for i in range(count):
+        cand = locator.nth(i)
+        try:
+            if cand.is_visible():
+                return cand
+        except Exception:
+            continue
+    return None
+
+
+def _confirm_remove(page) -> str | None:
+    # The confirmation dialog ("Remove member from organization?") carries a
+    # red **Remove** button. Wait for that *visible* button directly instead of
+    # scoping through a dialog container — Unity keeps hidden modal nodes in the
+    # DOM, so container-first selectors resolve to a hidden element and time out
+    # (manifests as a bogus "no-confirm-dialog").
+    confirm_name = re.compile(r"^(remove|remove\s+member|confirm|yes|delete)$", re.I)
+    deadline = time.time() + 10
+    confirm = None
+    while time.time() < deadline:
+        confirm = _find_visible(page.get_by_role("button", name=confirm_name))
+        if confirm is None:
+            confirm = _find_visible(
+                page.locator(
+                    'button:has-text("Remove"), button:has-text("Confirm"), '
+                    'button:has-text("Delete"), button:has-text("Yes")'
+                )
+            )
+        if confirm is not None:
+            break
+        time.sleep(0.25)
+
+    if confirm is None:
         return "needs-confirmation: no-confirm-dialog"
 
+    # Best-effort safety guard: make sure the visible dialog is really the
+    # remove-from-organization confirmation before we click. Never block on it.
     try:
-        text = dialog.inner_text().lower()
+        dialog = _find_visible(
+            page.locator('[role="dialog"], [role="alertdialog"], [class*="modal" i]')
+        )
+        if dialog is not None:
+            text = dialog.inner_text().lower()
+            if "remove" not in text or "organization" not in text:
+                return "needs-confirmation: dialog-text-unexpected"
     except Exception:
-        text = ""
-    if "remove" not in text or "organization" not in text:
-        return "needs-confirmation: dialog-text-unexpected"
+        pass
 
-    confirm = dialog.get_by_role(
-        "button", name=re.compile(r"^(remove|remove\s+member|confirm|yes|delete)$", re.I)
-    ).first
-    if confirm.count() == 0:
-        confirm = dialog.locator(
-            'button:has-text("Remove"), button:has-text("Confirm"), '
-            'button:has-text("Delete"), button:has-text("Yes")'
-        ).last
-    if confirm.count() == 0:
-        return "failed: confirm-button-not-found"
-    confirm.click()
+    try:
+        confirm.scroll_into_view_if_needed()
+        confirm.click()
+    except Exception:
+        return "failed: confirm-button-click"
     return None
 
 

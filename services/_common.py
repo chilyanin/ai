@@ -52,6 +52,7 @@ def service_profile_dir(service_slug: str) -> str:
 
 OTP_INPUT_SELECTORS = (
     'input[autocomplete="one-time-code"], '
+    'input[autocomplete="one-time-password"], '
     'input[name="code"], '
     'input[name="totp"], '
     'input[name="otp"], '
@@ -92,7 +93,15 @@ def submit_totp(page, secret_env: str, *, retries: int = 1) -> bool:
         return False
 
     box_count = inputs.count()
-    multi_box = box_count > 1
+    # Six-box OTP widgets (e.g. Slack) often expose only the FIRST box to our
+    # selector — the rest carry autocomplete="off" and no name/id. Detect them
+    # by the single-character maxlength so we type-and-auto-advance instead of
+    # fill()-ing the whole code into a one-char box.
+    try:
+        first_maxlen = inputs.first.evaluate("el => el.maxLength")
+    except Exception:
+        first_maxlen = -1
+    multi_box = box_count > 1 or first_maxlen == 1
 
     attempts = retries + 1
     for attempt in range(attempts):
@@ -115,11 +124,17 @@ def submit_totp(page, secret_env: str, *, retries: int = 1) -> bool:
             single.fill("")
             single.fill(code)
 
-        btn = page.get_by_role("button", name=OTP_SUBMIT_NAME_RE).first
-        if btn.count():
-            btn.click()
-        else:
-            inputs.first.press("Enter")
+        # Submit. Multi-box widgets (e.g. Slack) often auto-submit once the last
+        # digit lands and navigate away — by now the button/inputs may be
+        # detached, so every step here is best-effort with short timeouts.
+        try:
+            btn = page.get_by_role("button", name=OTP_SUBMIT_NAME_RE).first
+            if btn.count():
+                btn.click(timeout=4_000)
+            elif inputs.first.count():
+                inputs.first.press("Enter", timeout=4_000)
+        except Exception:
+            pass
 
         # Brief wait, then check for an error message.
         time.sleep(2.5)
