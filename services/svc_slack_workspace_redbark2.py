@@ -7,13 +7,20 @@ admin Members UI:
     /admin (People tab) → filter by email → row "Actions" → Deactivate account
     → confirm dialog (primary_action).
 
-Session auth — relies on a logged-in Slack session in the persistent browser
-profile. Prime it once (or when cookies expire) with:
+Auth — reuses a logged-in Slack session in the persistent browser profile when
+one exists. If the session is missing/expired and LOGIN+PASSWORD are configured,
+it logs in automatically via the no-SSO form (email + password + TOTP). You can
+still prime a session by hand with:
 
     ./prime_session.py slack --url https://redbark2.slack.com/admin
 
 Required env:
     SLACK_WORKSPACE_REDBARK2_URL   admin URL (https://redbark2.slack.com/admin)
+Optional (enables automated login):
+    SLACK_WORKSPACE_REDBARK2_LOGIN       email (e.g. services@fluytstudio.net)
+    SLACK_WORKSPACE_REDBARK2_PASSWORD    password
+    SLACK_WORKSPACE_REDBARK2_2FA_SECRET  base32 TOTP secret
+    SLACK_WORKSPACE_REDBARK2_LOGIN_URL   no-SSO login URL (defaults below)
 
 Statuses:
     found / deactivated / already-deactivated / user-not-found /
@@ -21,14 +28,17 @@ Statuses:
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 
-from services._common import get_page, is_find_only
+from services._common import get_page, is_find_only, submit_totp
 
 DEFAULT_TIMEOUT = 20_000
 SLUG = "slack_workspace_redbark2"
 DEFAULT_URL = "https://redbark2.slack.com/admin"
+DEFAULT_LOGIN_URL = "https://redbark2.slack.com/?no_sso=1&redir=%2Fadmin"
+SECRET_ENV = "SLACK_WORKSPACE_REDBARK2_2FA_SECRET"
 
 SEARCH = '[data-qa="workspace-members__table-header-search_input"]'
 ROW = '[data-qa="workspace-members_table_data_table_row"]'
@@ -36,6 +46,72 @@ ACTIONS_BTN = '[data-qa="table_row_actions_button"]'
 DEACTIVATE_ITEM = '[data-qa="ws-members-action_deactivate"]'
 ACTIVATE_ITEM = '[data-qa="ws-members-action_activate"]'
 CONFIRM_BTN = '[data-qa="primary_action"]'
+
+
+def _dismiss_cookie_banner(page) -> None:
+    """Slack's no-SSO page shows a OneTrust cookie banner that can overlay the
+    Sign in button. Reject (or accept) it so the click lands."""
+    for sel in ("#onetrust-reject-all-handler", "#onetrust-accept-btn-handler"):
+        try:
+            btn = page.locator(sel)
+            if btn.count() and btn.first.is_visible():
+                btn.first.click(timeout=2_000)
+                time.sleep(0.3)
+                return
+        except Exception:
+            pass
+
+
+def _login(page, creds: dict) -> bool:
+    """Sign in via the no-SSO form: email + password + TOTP. Returns True once
+    the admin Members search input is present."""
+    login = creds.get("login")
+    password = creds.get("password")
+    if not (login and password):
+        return False
+
+    login_url = os.environ.get("SLACK_WORKSPACE_REDBARK2_LOGIN_URL") or DEFAULT_LOGIN_URL
+    page.goto(login_url)
+    try:
+        page.wait_for_load_state("domcontentloaded")
+    except Exception:
+        pass
+    time.sleep(1.5)
+    _dismiss_cookie_banner(page)
+
+    # A still-valid session redirects the login URL straight to /admin — the
+    # email form never appears. Treat that as already-logged-in rather than
+    # throwing on a missing #email (which would misreport as a login failure).
+    if page.locator(SEARCH).count():
+        return True
+
+    email = page.locator('#email, [data-qa="login_email"]').first
+    try:
+        email.wait_for(timeout=8_000)
+    except Exception:
+        # No email form and no members table — nothing we can drive here.
+        return page.locator(SEARCH).count() > 0
+
+    try:
+        email.fill(login)
+        page.fill('#password, [data-qa="login_password"]', password)
+    except Exception:
+        return False
+
+    try:
+        page.locator('#signin_btn, [data-qa="signin_button"]').first.click()
+    except Exception:
+        return False
+    time.sleep(3)
+
+    # 2FA — Slack uses a six single-character box widget; submit_totp handles it.
+    submit_totp(page, SECRET_ENV)
+
+    try:
+        page.wait_for_selector(SEARCH, timeout=15_000)
+        return True
+    except Exception:
+        return page.locator(SEARCH).count() > 0
 
 
 def _looks_logged_out(page) -> bool:
@@ -124,9 +200,16 @@ def deactivate(context, creds: dict, target_user: str) -> str:
         time.sleep(0.15)
 
     if not _ensure_members_table(page, url):
-        if _looks_logged_out(page):
+        # Session missing/expired. Try automated login if creds are configured.
+        if creds.get("login") and creds.get("password"):
+            if not _login(page, creds):
+                return "failed: login (check SLACK creds / 2FA secret)"
+            if not _ensure_members_table(page, url):
+                return "failed: members-table-not-rendered-after-login"
+        elif _looks_logged_out(page):
             return "failed: not-logged-in (run ./prime_session.py slack)"
-        return "failed: members-table-not-rendered"
+        else:
+            return "failed: members-table-not-rendered"
 
     row = _find_row(page, target_user)
     if row is None:

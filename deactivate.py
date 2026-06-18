@@ -276,6 +276,13 @@ def main() -> int:
         help="Process only tasks for service(s) matching NAME (case-insensitive substring). Repeatable.",
     )
     ap.add_argument(
+        "--target",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="Process only tasks whose target (email/identifier) matches ID (case-insensitive substring). Repeatable.",
+    )
+    ap.add_argument(
         "--include-completed",
         action="store_true",
         help="Include Asana tasks already marked complete (default: only open tasks)",
@@ -306,12 +313,21 @@ def main() -> int:
         print(f"no matching tasks for {args.date}")
         return 0
 
-    service_filters = [s.lower() for s in args.service]
+    # Normalize punctuation so a filter like "slack workspace redbark2" matches
+    # the Asana service name "Slack (Workspace Redbark2)" (parentheses, dots,
+    # etc. all collapse to single spaces on both sides).
+    def _norm(s: str) -> str:
+        return re.sub(r"\W+", " ", s.lower(), flags=re.UNICODE).strip()
+
+    service_filters = [_norm(s) for s in args.service]
+    target_filters = [s.lower() for s in args.target]
 
     plan: list[dict[str, Any]] = []
     for t in matching:
         service, target = parse_task(t)
-        if service_filters and not any(f in service.lower() for f in service_filters):
+        if service_filters and not any(f in _norm(service) for f in service_filters):
+            continue
+        if target_filters and not any(f in target.lower() for f in target_filters):
             continue
         creds = load_creds(service)
         if not creds:

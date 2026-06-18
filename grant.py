@@ -168,7 +168,12 @@ def main() -> int:
         print(f"no matching access-request tasks")
         return 0
 
-    service_filters = [s.lower() for s in args.service]
+    # Normalize punctuation so a filter like "slack workspace redbark2" matches
+    # the Asana service name "Slack (Workspace Redbark2)".
+    def _norm(s: str) -> str:
+        return re.sub(r"\W+", " ", s.lower(), flags=re.UNICODE).strip()
+
+    service_filters = [_norm(s) for s in args.service]
 
     plan: list[dict[str, Any]] = []
     for t in matching:
@@ -176,7 +181,7 @@ def main() -> int:
         service = parsed["service"]
         target = parsed["target"]
         role = parsed["role"]
-        if service_filters and not any(f in service.lower() for f in service_filters):
+        if service_filters and not any(f in _norm(service) for f in service_filters):
             continue
         creds = load_creds(service)
         if not creds:

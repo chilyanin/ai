@@ -14,10 +14,8 @@ from __future__ import annotations
 
 import re
 import time
-from urllib.parse import urljoin
 
 from services._common import (
-    find_user_row,
     get_page,
     is_find_only,
     is_on_auth_page,
@@ -30,19 +28,12 @@ DEFAULT_TIMEOUT = 20_000
 SETTLE_TIMEOUT = 5_000
 SESSION_KEY = "_skills_base_programmers_signed_in"
 SERVICE_SLUG = "skills_base_programmers"
-USERS_TAB_RE = re.compile(
-    r"^(users?|members?|people|team|employees|пользователи|участники|команда)$",
-    re.I,
-)
-# Skills Base keeps the manageable people list under the left-nav "Directories"
-# group → "People" (host app-eu.skills-base.com, path /people). This is NOT the
-# Administration → Users area the generic discovery assumed, which is why the
-# users tab was never found. We expand Directories, then click People.
-DIRECTORIES_RE = re.compile(r"^(directories|справочники|каталоги)$", re.I)
+# Skills Base's manageable people list lives at <app-eu host>/people/ and is
+# reached from the left-nav "Directories" group → "People". PEOPLE_RE matches
+# that nav link for the bounce-back fallback in _open_users_area.
 PEOPLE_RE = re.compile(r"^(people|persons?|directory of people|люди|сотрудники)$", re.I)
 
-# Row containers for a person in the People list. Shared by find_user_row and
-# the deactivate flow so both target the same element.
+# Row containers for a person in the People list, used by _locate_person_row.
 PERSON_ROW_SELECTORS = (
     '[class*="user" i]',
     '[class*="member" i]',
@@ -116,16 +107,6 @@ def _is_mfa_setup(page) -> bool:
     )
 
 
-def _is_personal_summary(page) -> bool:
-    if "/people/view" in page.url.lower():
-        return True
-    try:
-        text = page.locator("body").inner_text(timeout=2_000).lower()
-    except Exception:
-        return False
-    return "my summary" in text and "administration" in text
-
-
 def _handle_mfa_setup(page) -> bool:
     if not _is_mfa_setup(page):
         return True
@@ -185,35 +166,6 @@ def _maybe_solve_captcha(page) -> None:
             pass
 
 
-def _has_user_list_surface(page, target_user: str) -> bool:
-    if _is_skills_base_login_landing(page) or _is_mfa_setup(page) or _is_personal_summary(page):
-        return False
-    try:
-        found = page.evaluate(
-            """(target) => {
-                const text = document.body.innerText.toLowerCase();
-                if (text.includes(target.toLowerCase())) return true;
-                const url = location.href.toLowerCase();
-                // Skills Base People directory: /people (list). Exclude the
-                // single-person summary at /people/view/<id>, which is not a list.
-                if (/\\/(people|directories)(\\b|\\/)/.test(url) && !/\\/people\\/view/.test(url)) {
-                    return true;
-                }
-                if (/(admin|administration|settings|account).*(user|member|people)/.test(url)) {
-                    return true;
-                }
-                const hasUserWords = /(users|members|people)/.test(text);
-                const hasAdminWords = /(administration|admin|settings|directories)/.test(text);
-                const hasListShape = Boolean(document.querySelector('[role="row"], table'));
-                return hasUserWords && hasAdminWords && hasListShape;
-            }""",
-            target_user,
-        )
-        return bool(found)
-    except Exception:
-        return False
-
-
 def _click_menu_item(page, label_re: re.Pattern) -> bool:
     for role in ("button", "link", "menuitem", "tab"):
         item = page.get_by_role(role, name=label_re).first
@@ -233,72 +185,6 @@ def _click_menu_item(page, label_re: re.Pattern) -> bool:
             return True
     except Exception:
         pass
-    return False
-
-
-def _try_administration_menu(page, target_user: str) -> bool:
-    if _click_menu_item(page, re.compile(r"^administration$", re.I)):
-        try:
-            page.wait_for_load_state("networkidle", timeout=SETTLE_TIMEOUT)
-        except Exception:
-            pass
-        time.sleep(0.5)
-
-    if _click_menu_item(page, USERS_TAB_RE):
-        try:
-            page.wait_for_load_state("networkidle", timeout=SETTLE_TIMEOUT)
-        except Exception:
-            pass
-        time.sleep(0.8)
-        return _has_user_list_surface(page, target_user)
-    return False
-
-
-def _try_directories_menu(page, target_user: str) -> bool:
-    """Skills Base's primary path: left-nav Directories group → People.
-
-    The Directories group is collapsed by default, so click it first to reveal
-    the People item, then click People.
-    """
-    if _click_menu_item(page, DIRECTORIES_RE):
-        try:
-            page.wait_for_load_state("networkidle", timeout=SETTLE_TIMEOUT)
-        except Exception:
-            pass
-        time.sleep(0.5)
-
-    if _click_menu_item(page, PEOPLE_RE):
-        try:
-            page.wait_for_load_state("networkidle", timeout=SETTLE_TIMEOUT)
-        except Exception:
-            pass
-        time.sleep(0.8)
-        return _has_user_list_surface(page, target_user)
-    return False
-
-
-def _try_direct_user_urls(page, target_user: str) -> bool:
-    candidates = (
-        # Skills Base's real people directory comes first.
-        "/people",
-        "/people/list",
-        "/administration/users",
-        "/administration/people",
-        "/administration/members",
-        "/admin/users",
-        "/admin/people",
-        "/settings/users",
-        "/account/users",
-    )
-    for path in candidates:
-        try:
-            page.goto(urljoin(page.url, path))
-            page.wait_for_load_state("networkidle", timeout=SETTLE_TIMEOUT)
-        except Exception:
-            pass
-        time.sleep(0.5)
-        if _has_user_list_surface(page, target_user):
-            return True
     return False
 
 
@@ -322,68 +208,78 @@ def _instance_problem(page) -> str | None:
     return None
 
 
+def _people_url(page, creds: dict) -> str:
+    """Absolute URL of the People directory list.
+
+    The org shortcut lives on app.skills-base.com/o/<slug> but the app itself
+    runs on the regional host (app-eu.skills-base.com for this org). The people
+    list is served at <origin>/people/. Derive the origin from the current
+    (post-login) URL when possible, falling back to the configured creds URL,
+    and force the EU app host.
+    """
+    base = page.url if "skills-base.com" in (page.url or "") else creds["url"]
+    m = re.match(r"https?://[^/]+", base or "")
+    origin = m.group(0) if m else "https://app-eu.skills-base.com"
+    origin = origin.replace("://app.skills-base.com", "://app-eu.skills-base.com")
+    return origin.rstrip("/") + "/people/"
+
+
+def _on_people_list(page) -> bool:
+    """True if we're on the People directory list (not a single-person view)."""
+    url = (page.url or "").lower()
+    if "/people/view" in url:
+        return False
+    if "/people" not in url:
+        return False
+    # A list has a "Search people" box and/or multiple data rows.
+    try:
+        if page.locator(
+            'input[placeholder*="search" i], input[type="search"]'
+        ).count():
+            return True
+        return page.locator('[role="row"], tbody tr').count() > 1
+    except Exception:
+        return False
+
+
 def _open_users_area(page, creds: dict, target_user: str) -> str:
-    page.goto(creds["url"])
+    # Skills Base's manageable people list is at <app-eu host>/people/. Go there
+    # directly — the generic menu/admin discovery isn't needed for this service.
+    people_url = _people_url(page, creds)
+    page.goto(people_url)
     try:
         page.wait_for_load_state("networkidle", timeout=SETTLE_TIMEOUT)
     except Exception:
         pass
     _maybe_solve_captcha(page)
+
     problem = _instance_problem(page)
     if problem:
         return problem
-    if _has_user_list_surface(page, target_user):
+
+    if _on_people_list(page):
         return "ok"
 
-    # Primary path for Skills Base: Directories → People.
-    if _try_directories_menu(page, target_user):
-        return "ok"
-
-    if _try_administration_menu(page, target_user):
-        return "ok"
-
-    for locator in (
-        page.get_by_role("tab", name=USERS_TAB_RE).first,
-        page.get_by_role("link", name=USERS_TAB_RE).first,
-        page.get_by_role("button", name=USERS_TAB_RE).first,
-        page.locator(
-            'a[href*="user" i], a[href*="member" i], a[href*="people" i], '
-            'button:has-text("Users"), button:has-text("Members"), '
-            'button:has-text("People"), [role="menuitem"]:has-text("Users"), '
-            '[role="menuitem"]:has-text("Members"), [role="menuitem"]:has-text("People")'
-        ).first,
-    ):
+    # Bounced to a personal/summary view (e.g. /people/view) — click the
+    # left-nav People link, then re-try the direct URL.
+    if _click_menu_item(page, PEOPLE_RE):
         try:
-            if locator.count() == 0:
-                continue
-            locator.click()
             page.wait_for_load_state("networkidle", timeout=SETTLE_TIMEOUT)
-            time.sleep(0.5)
-            if _has_user_list_surface(page, target_user):
-                return "ok"
         except Exception:
-            continue
-
-    if _try_direct_user_urls(page, target_user):
+            pass
+        time.sleep(0.5)
+    if _on_people_list(page):
         return "ok"
 
-    return _browser_use_users_tab_fallback(page)
-
-
-def _browser_use_users_tab_fallback(page) -> str:
-    """Last-resort hook requested by the operator.
-
-    browser_use is intentionally imported lazily because this project still
-    runs primarily through Playwright. In this environment the installed
-    browser_use package may require an LLM/provider setup before it can drive a
-    browser, so this function reports a clear status instead of breaking the
-    whole deactivation run.
-    """
+    page.goto(people_url)
     try:
-        import browser_use  # noqa: F401
-    except Exception as e:  # noqa: BLE001
-        return f"needs-confirmation: users-tab-not-found-browser-use-unavailable ({type(e).__name__})"
-    return "needs-confirmation: users-tab-not-found-browser-use-needed"
+        page.wait_for_load_state("networkidle", timeout=SETTLE_TIMEOUT)
+    except Exception:
+        pass
+    if _on_people_list(page):
+        return "ok"
+
+    return "failed: people-list-not-rendered"
 
 
 def _login(page, creds: dict) -> bool:
@@ -463,30 +359,41 @@ def _login(page, creds: dict) -> bool:
     return _handle_mfa_setup(page)
 
 
-# Action-menu item that disables a person, and the confirm-dialog button.
-# Defensive alternations: the exact Skills Base label is confirmed to live in a
-# per-row action menu, but the precise wording (Deactivate / Disable / Archive /
-# Make inactive) is matched leniently so a wording change degrades to a clear
-# needs-confirmation rather than a wrong click.
-DEACTIVATE_ITEM_RE = re.compile(
-    r"(deactivate|disable|archive|make\s+inactive|set\s+(as\s+)?inactive|"
-    r"деактивировать|отключить|архивировать|сделать\s+неактивн)",
-    re.I,
+# Skills Base offboarding is a DELETE. Confirmed row markup (legacy Bootstrap):
+#   <a title="Delete <Name>" href="/people/delete/id/<id>" class="btn btn-mini">
+#       <i class="icon-trash"></i></a>
+# Clicking it shows a confirmation modal whose primary button is "Delete".
+DELETE_CONFIRM_RE = re.compile(
+    r"^(delete|remove|confirm|yes|ok|удалить|подтвердить|да)\b", re.I
 )
-CONFIRM_RE = re.compile(
-    r"^(deactivate|disable|archive|confirm|yes|ok|continue|proceed|remove|"
-    r"деактивировать|отключить|подтвердить|да|продолжить|удалить)\b",
-    re.I,
+# Selectors for the per-row delete (basket/trash) control. Confirmed-shape
+# selectors first, then defensive fallbacks for other markups.
+DELETE_BTN_SEL = (
+    'a[href*="/people/delete" i], a[href*="/delete" i], '
+    'a[title*="delete" i], button[title*="delete" i], '
+    'a:has(i[class*="trash" i]), button:has(i[class*="trash" i]), '
+    'a[aria-label*="delete" i], button[aria-label*="delete" i], '
+    'button[aria-label*="remove" i], a[aria-label*="remove" i], '
+    'button[aria-label*="trash" i], button[aria-label*="basket" i], '
+    'button[title*="remove" i], button[title*="basket" i], '
+    'a:has(i[class*="basket" i]), button:has(i[class*="basket" i]), '
+    'button:has(i[class*="delete" i]), button:has(i[class*="bin" i]), '
+    'button:has(svg[class*="trash" i]), button:has(svg[class*="basket" i]), '
+    'button:has(svg[class*="delete" i])'
 )
-ACTIONS_BUTTON_RE = re.compile(r"^(actions?|действия)$", re.I)
-INACTIVE_WORDS = ("inactive", "deactivated", "disabled", "неактив", "деактивирован", "отключ")
+# Confirmation surface: a Bootstrap modal (no role=dialog in this legacy app),
+# a modern role=dialog/alertdialog, or a standalone /people/delete confirm page.
+CONFIRM_SURFACE_SEL = (
+    '[role="dialog"], [role="alertdialog"], '
+    '.modal.in, .modal.show, .modal[style*="display: block"], .modal:visible'
+)
 
 
 def _locate_person_row(page, target_user: str):
-    """Re-locate the list row for `target_user` (mirrors find_user_row's match).
+    """Locate the People-grid row for `target_user`. Returns a Locator or None.
 
-    find_user_row already outlined this row; we re-find it so the deactivate
-    flow can act on it. Returns a Locator or None.
+    Used by both _find_person (to outline the row) and the delete flow (to act
+    on it).
     """
     selectors = [
         f'[role="row"]:has-text("{target_user}")',
@@ -507,56 +414,50 @@ def _locate_person_row(page, target_user: str):
     return row
 
 
-def _open_row_action_menu(page, row) -> bool:
-    """Open the per-row action menu (an "Actions" button or a kebab/⋮)."""
-    actions = row.get_by_role("button", name=ACTIONS_BUTTON_RE).first
-    if actions.count():
-        try:
-            actions.click()
-            return True
-        except Exception:
-            pass
-
-    kebab = row.locator(
-        'button[aria-haspopup], button[aria-label*="action" i], '
-        'button[aria-label*="menu" i], button[aria-label*="more" i], '
-        'button[aria-label*="options" i], button:has-text("⋮"), '
-        'button:has-text("…"), button:has-text("...")'
-    ).first
-    if kebab.count() == 0:
-        # Reveal hover-only controls, then take the row's trailing button.
-        try:
-            row.hover()
-        except Exception:
-            pass
-        time.sleep(0.3)
-        kebab = row.locator("button").last
-    if kebab.count() == 0:
-        return False
+def _find_row_delete_button(row):
+    """Locate the basket/trash delete control inside `row`. Returns it or None."""
+    btn = row.locator(DELETE_BTN_SEL).first
+    if btn.count():
+        return btn
+    # Reveal hover-only action controls, then try again.
     try:
-        kebab.click()
-        return True
+        row.hover()
     except Exception:
-        return False
+        pass
+    time.sleep(0.3)
+    btn = row.locator(DELETE_BTN_SEL).first
+    return btn if btn.count() else None
 
 
-def _confirm_deactivation(page) -> str | None:
-    """Handle the confirmation dialog. Returns None on success, else a status."""
+def _confirm_delete(page) -> str | None:
+    """Confirm deletion. The trash control either opens a Bootstrap modal or
+    navigates to a /people/delete confirm page; handle both. Returns None on
+    success, else a needs-confirmation status."""
+    # Scope to a confirmation surface if one appeared (modal/dialog); otherwise
+    # fall back to the whole page (standalone confirm page).
+    scope = page
     try:
-        dialog = page.locator('[role="dialog"]:visible, [role="alertdialog"]:visible').last
-        dialog.wait_for(timeout=6_000)
+        surface = page.locator(CONFIRM_SURFACE_SEL).last
+        surface.wait_for(state="visible", timeout=6_000)
+        scope = surface
     except Exception:
-        return "needs-confirmation: no-confirm-dialog"
+        if "/people/delete" not in (page.url or "").lower():
+            return "needs-confirmation: no-confirm-surface"
 
-    confirm = dialog.get_by_role("button", name=CONFIRM_RE).first
+    # The confirm control is a button OR an anchor (legacy uses <a class="btn
+    # btn-danger">Delete</a>). Match by role first, then by text, scoped to the
+    # confirm surface. Exclude the row's own trash link via text match on a
+    # short label.
+    confirm = scope.get_by_role("button", name=DELETE_CONFIRM_RE).first
     if confirm.count() == 0:
-        confirm = dialog.locator(
-            'button:has-text("Deactivate"), button:has-text("Disable"), '
-            'button:has-text("Archive"), button:has-text("Confirm"), '
-            'button:has-text("Yes"), button:has-text("OK")'
+        confirm = scope.locator(
+            'a.btn-danger, button.btn-danger, '
+            'button:has-text("Delete"), a:has-text("Delete"), '
+            'button:has-text("Remove"), a:has-text("Remove"), '
+            'button:has-text("Confirm"), input[type="submit"][value*="elete" i]'
         ).last
     if confirm.count() == 0:
-        return "needs-confirmation: confirm-button-not-found"
+        return "needs-confirmation: confirm-delete-button-not-found"
     try:
         confirm.click(timeout=8_000)
     except Exception as e:  # noqa: BLE001
@@ -565,55 +466,101 @@ def _confirm_deactivation(page) -> str | None:
 
 
 def _deactivate_person(page, target_user: str) -> str:
-    """Open the found person's row action menu, deactivate, confirm, verify.
+    """Delete the found person: click the row's basket button, confirm Delete,
+    verify the row is gone.
 
-    Returns one of: "deactivated", "already-deactivated",
-    "needs-confirmation: ...".
+    Returns "deactivated" on success, else "needs-confirmation: ...".
     """
     row = _locate_person_row(page, target_user)
     if row is None:
         return "needs-confirmation: row-not-found-for-action"
 
-    # Already inactive? The list usually shows only active people, but if a
-    # status badge says otherwise, don't act.
+    delete_btn = _find_row_delete_button(row)
+    if delete_btn is None:
+        return "needs-confirmation: delete-button-not-found"
     try:
-        if any(w in row.inner_text().lower() for w in INACTIVE_WORDS):
-            return "already-deactivated"
-    except Exception:
-        pass
-
-    if not _open_row_action_menu(page, row):
-        return "needs-confirmation: action-menu-not-found"
+        delete_btn.click(timeout=8_000)
+    except Exception as e:  # noqa: BLE001
+        return f"needs-confirmation: delete-click ({type(e).__name__})"
     time.sleep(0.4)
 
-    if not _click_menu_item(page, DEACTIVATE_ITEM_RE):
-        return "needs-confirmation: deactivate-action-not-found"
-    time.sleep(0.4)
-
-    confirm_err = _confirm_deactivation(page)
+    confirm_err = _confirm_delete(page)
     if confirm_err:
         return confirm_err
 
-    # Verify: a success toast, the row showing an inactive status, or the row
-    # leaving the (active) list all count as success.
+    # Verify: a success toast, or the row leaving the list.
     try:
         page.wait_for_function(
-            """(args) => {
-                const [target, words] = args;
+            """(target) => {
                 const text = document.body.innerText.toLowerCase();
-                if (/(has been|successfully).{0,20}(deactivat|disabl|archiv)/.test(text)) return true;
+                if (/(has been|successfully).{0,20}(delet|remov)/.test(text)) return true;
                 const sel = '[role="row"], tr, [role="listitem"], li';
                 const rows = Array.from(document.querySelectorAll(sel))
                     .filter(r => r.innerText.toLowerCase().includes(target.toLowerCase()));
-                if (rows.length === 0) return true;  // gone from the active list
-                return rows.some(r => words.some(w => r.innerText.toLowerCase().includes(w)));
+                return rows.length === 0;  // gone from the list
             }""",
-            arg=[target_user, list(INACTIVE_WORDS)],
+            arg=target_user,
             timeout=8_000,
         )
         return "deactivated"
     except Exception:
-        return "needs-confirmation: deactivation-unverified"
+        return "needs-confirmation: deletion-unverified"
+
+
+PEOPLE_SEARCH_SEL = '#peopleSearch, input[placeholder*="people" i]'
+# DataTables footer line, e.g. "Showing 1 to 1 of 1 entries (filtered from 119
+# total entries)". This is the authoritative signal that the grid has applied
+# the search — far more reliable than scraping transient "No matching records"
+# text that flashes while the AJAX data is still loading.
+DT_INFO_SEL = '.dataTables_info, [id$="_info"]'
+_DT_FILTERED_RE = re.compile(r"filtered from\s+[\d,]+", re.I)
+_DT_ZERO_RE = re.compile(r"showing\s+0\s+to\s+0|of\s+0\s+entries", re.I)
+
+
+def _find_person(page, target_user: str) -> str:
+    """Filter the People grid for `target_user` and locate their row.
+
+    Uses the People-page "Search people" box (#peopleSearch) with real
+    keystrokes — the grid filters on keyup, so .fill() alone doesn't trigger it.
+    Waits for the DataTables grid to *settle* (its info line reports a filtered
+    count) before deciding, so we don't mistake the transient "No matching
+    records found" shown during load for a real miss. Outlines the matched row
+    for the proof screenshot. Returns "found", "user-not-found", or
+    "failed: people-list-not-rendered".
+    """
+    box = page.locator(PEOPLE_SEARCH_SEL).first
+    if box.count() == 0:
+        return "failed: people-list-not-rendered"
+    try:
+        box.click()
+        box.fill("")
+        box.type(target_user, delay=40)
+    except Exception:
+        return "failed: people-list-not-rendered"
+
+    # Poll until the row appears, or the grid settles on an explicit 0 results.
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        row = _locate_person_row(page, target_user)
+        if row is not None:
+            try:
+                row.scroll_into_view_if_needed()
+                row.evaluate("el => el.style.outline = '3px solid #ff3b30'")
+            except Exception:
+                pass
+            return "found"
+
+        try:
+            info = page.locator(DT_INFO_SEL).first.inner_text(timeout=1_000)
+        except Exception:
+            info = ""
+        # Only trust a 0-result verdict once the grid reports it has applied the
+        # filter ("filtered from N") — otherwise it's still loading.
+        if _DT_FILTERED_RE.search(info) and _DT_ZERO_RE.search(info):
+            return "user-not-found"
+        time.sleep(0.5)
+
+    return "user-not-found"
 
 
 def run(context, creds: dict, target_user: str, *, session_key: str, slug: str) -> str:
@@ -636,14 +583,10 @@ def run(context, creds: dict, target_user: str, *, session_key: str, slug: str) 
     if users_status != "ok":
         return users_status
 
-    # A few SPAs render the user list just after networkidle.
+    # Let the grid finish its initial render before filtering.
     time.sleep(0.5)
 
-    status = find_user_row(
-        page,
-        target_user,
-        extra_row_selectors=PERSON_ROW_SELECTORS,
-    )
+    status = _find_person(page, target_user)
     if is_find_only():
         return status
     if status != "found":
