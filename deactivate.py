@@ -84,6 +84,10 @@ def _env_key_candidates(service: str) -> list[str]:
     # operationally this is still the same Unity Cloud admin surface.
     if key.startswith("UNITY_"):
         keys.append("UNITY")
+    # "Adobe Creative Cloud (RedBark)" et al. all share one UMAPI credential
+    # stored under the canonical ADOBE_* keys.
+    if key.startswith("ADOBE"):
+        keys.append("ADOBE")
     return list(dict.fromkeys(keys))
 
 
@@ -92,9 +96,11 @@ def load_creds(service: str) -> dict | None:
 
     Accepts either `SERVICE_<KEY>_<FIELD>` or bare `<KEY>_<FIELD>`.
 
-    Three credential modes are supported:
+    Four credential modes are supported:
       * Browser:  LOGIN + PASSWORD (and usually URL)
       * API:      TOKEN (used by API-based plugins like Slack)
+      * OAuth:    CLIENT_ID + CLIENT_SECRET + ORG_ID (OAuth Server-to-Server,
+                  used by API-based plugins like Adobe UMAPI)
       * Session:  AUTH=session + URL — plugin handles auth via Playwright's
                   persistent profile (one-time manual headed login, cookies
                   survive across runs). No credentials stored in .env.
@@ -109,15 +115,30 @@ def load_creds(service: str) -> dict | None:
         "password": _first_env(*(n for key in keys for n in (f"SERVICE_{key}_PASSWORD", f"{key}_PASSWORD"))),
         "token": _first_env(*(n for key in keys for n in (f"SERVICE_{key}_TOKEN", f"{key}_TOKEN"))),
         "team_id": _first_env(*(n for key in keys for n in (f"SERVICE_{key}_TEAM_ID", f"{key}_TEAM_ID"))),
+        "client_id": _first_env(*(n for key in keys for n in (f"SERVICE_{key}_CLIENT_ID", f"{key}_CLIENT_ID"))),
+        "client_secret": _first_env(*(n for key in keys for n in (f"SERVICE_{key}_CLIENT_SECRET", f"{key}_CLIENT_SECRET"))),
+        "org_id": _first_env(*(n for key in keys for n in (f"SERVICE_{key}_ORG_ID", f"{key}_ORG_ID"))),
         "auth": _first_env(*(n for key in keys for n in (f"SERVICE_{key}_AUTH", f"{key}_AUTH"))) or "",
         "notes": _first_env(*(n for key in keys for n in (f"SERVICE_{key}_NOTES", f"{key}_NOTES"))) or "",
     }
     has_browser = bool(creds["login"] and creds["password"])
     has_api = bool(creds["token"])
+    has_oauth = bool(creds["client_id"] and creds["client_secret"] and creds["org_id"])
     has_session = creds["auth"].lower() == "session" and bool(creds["url"])
-    if not (has_browser or has_api or has_session):
+    if not (has_browser or has_api or has_oauth or has_session):
         return None
     return creds
+
+
+def _has_api_creds(creds: dict) -> bool:
+    """True if `creds` carry credentials for an API-based (non-browser) plugin.
+
+    Covers both a static bearer TOKEN and an OAuth Server-to-Server triple
+    (CLIENT_ID + CLIENT_SECRET + ORG_ID). API plugins don't need a URL.
+    """
+    if creds.get("token"):
+        return True
+    return bool(creds.get("client_id") and creds.get("client_secret") and creds.get("org_id"))
 
 
 def _capture_shots(context, shot_root: Path, row: dict, outcome: str) -> list[str]:
@@ -155,6 +176,14 @@ def _missing_creds_fields(service: str) -> list[str]:
     keys = _env_key_candidates(service)
     if _first_env(*(n for key in keys for n in (f"SERVICE_{key}_TOKEN", f"{key}_TOKEN"))):
         return []
+    # OAuth Server-to-Server mode: if any of the triple is set, treat this as
+    # an OAuth service and report whichever of the three are missing.
+    oauth = {
+        f: _first_env(*(n for key in keys for n in (f"SERVICE_{key}_{f}", f"{key}_{f}")))
+        for f in ("CLIENT_ID", "CLIENT_SECRET", "ORG_ID")
+    }
+    if any(oauth.values()):
+        return [f for f, v in oauth.items() if not v]
     # Session-auth mode only requires URL — LOGIN/PASSWORD are intentionally
     # omitted (auth handled by the persistent browser profile).
     auth = _first_env(
@@ -332,8 +361,8 @@ def main() -> int:
         creds = load_creds(service)
         if not creds:
             status = "missing-credentials"
-        elif not creds.get("token") and not creds.get("url"):
-            # Browser-mode plugin needs a URL; API-mode (token) doesn't.
+        elif not _has_api_creds(creds) and not creds.get("url"):
+            # Browser-mode plugin needs a URL; API-mode (token/OAuth) doesn't.
             status = "missing-url"
         else:
             status = "ready"
@@ -385,8 +414,8 @@ def main() -> int:
         if not row["creds"]:
             outcomes[gid] = "missing-credentials"
             continue
-        # Browser-mode plugins need a URL; API-mode (token) plugins don't.
-        if not row["creds"].get("token") and not row["creds"].get("url"):
+        # Browser-mode plugins need a URL; API-mode (token/OAuth) plugins don't.
+        if not _has_api_creds(row["creds"]) and not row["creds"].get("url"):
             outcomes[gid] = "missing-url"
             continue
         ready_by_service.setdefault(row["service"], []).append(row)
