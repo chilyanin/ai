@@ -6,7 +6,7 @@
 ._*
 
 # Custom folder icons
-Icon
+Icon
 
 # Volume root files
 .DocumentRevisions-V100
@@ -48,6 +48,18 @@ dist/
 
 # dotenv environment variable files
 .env
+
+# Playwright/Chromium persistent browser profiles — contain live session
+# cookies and auth tokens; must never be committed.
+.browser_profile/
+.browser_profiles/
+
+# Proof screenshots produced by deactivate.py / grant.py at runtime
+screenshots/
+
+# Monitor runtime SQLite database (+ WAL/journal sidecars)
+monitor.db
+monitor.db-*
 
 # Virtual environments
 .venv
