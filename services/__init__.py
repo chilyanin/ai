@@ -20,14 +20,43 @@ def _slug(service_name: str) -> str:
     return "svc_" + s if s else "svc_unknown"
 
 
+# Some Asana titles carry a tail inside the service name — e.g. the transfer
+# variant "Syncsketch (RedBark) при переходе в Playrix", which slugifies to
+# svc_syncsketch_redbark_при_переходе_в_playrix. These all target the same admin
+# surface, so a slug starting with one of these prefixes falls back to it.
+PREFIX_ALIASES = ("svc_syncsketch",)
+
+
+def _load_module(service_name: str):
+    """Import the plugin module for `service_name`, or None if there isn't one."""
+    slug = _slug(service_name)
+    candidates = [slug]
+    candidates += [a for a in PREFIX_ALIASES if slug.startswith(a) and a != slug]
+    for candidate in candidates:
+        try:
+            return importlib.import_module(f"services.{candidate}")
+        except ModuleNotFoundError:
+            continue
+    return None
+
+
 def get_handler(service_name: str):
-    module_name = f"services.{_slug(service_name)}"
-    try:
-        module = importlib.import_module(module_name)
-    except ModuleNotFoundError:
+    module = _load_module(service_name)
+    if module is None:
         from services import _generic
         return _generic.deactivate
     return module.deactivate
+
+
+def required_env(service_name: str) -> tuple[str, ...] | None:
+    """Env field names a plugin declares as required (e.g. ("LOGIN", "TOKEN")).
+
+    None when the plugin doesn't declare any, in which case callers fall back to
+    the default browser-mode expectations (URL/LOGIN/PASSWORD).
+    """
+    module = _load_module(service_name)
+    fields = getattr(module, "REQUIRED_ENV", None) if module else None
+    return tuple(fields) if fields else None
 
 
 def env_key(service_name: str) -> str:

@@ -29,7 +29,10 @@ from services._common import service_profile_dir
 
 TITLE_PREFIX = "Заявка на лицензию/доступ "
 TITLE_SUFFIX_RE = re.compile(r"\s*/\s*Purchase Request\s*$", re.I)
-EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+# Must end on an alphanumeric: the notes are prose, so a trailing sentence dot
+# ("...на maximt@playrix.com. Посмотрите") would otherwise be captured as part
+# of the address and read as a different account.
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]*\w")
 
 # Lines we lift out of the Russian access-request task body.
 NOTES_FIELDS = {
@@ -42,6 +45,41 @@ NOTES_FIELDS = {
 
 ROLE_HINT_RE = re.compile(r"->\s*([A-Za-zА-Яа-я]+)\b")
 
+# The request form's service/role dropdowns have an "Другое" ("Other") option.
+# When the requester picks it, `Имя сервиса:` literally reads "Другое" — a
+# placeholder, not a service. Trusting it produced env keys like `ДРУГОЕ`
+# (Cyrillic, unusable) and hid the real name, which lives in the title.
+PLACEHOLDER_RE = re.compile(
+    r"^(?:другое|прочее|other|misc|n/?a|нет|none|-{1,2}|—|–)$", re.I
+)
+# Asana auto-linkifies bare domains, so `Имя сервиса: Coda.io` arrives as
+# "http://Coda.io" and yielded the env key HTTP_CODA_IO.
+URL_SCHEME_RE = re.compile(r"^(?:https?|ftp)://", re.I)
+# Title shape is "<Service> для <Name>", but the service part is sometimes
+# absent entirely ("Заявка на лицензию/доступ для Машков Роман").
+TITLE_NO_SERVICE_RE = re.compile(r"^для\s+", re.I)
+
+
+def _clean_service(name: str) -> str:
+    """Normalize a service name: drop URL scheme, quotes, trailing slash."""
+    s = name.strip().strip("«»\"'`").strip()
+    s = URL_SCHEME_RE.sub("", s)
+    s = s.rstrip("/").strip()
+    return s
+
+
+def _is_placeholder(value: str) -> bool:
+    return bool(PLACEHOLDER_RE.match(value.strip()))
+
+
+def _service_from_title(title: str) -> str:
+    """Extract the service name from the task title, or "" if absent."""
+    body = title[len(TITLE_PREFIX):] if title.startswith(TITLE_PREFIX) else title
+    body = TITLE_SUFFIX_RE.sub("", body).strip()
+    if TITLE_NO_SERVICE_RE.match(body):
+        return ""  # title carries only the person's name
+    return _clean_service(re.split(r"\s+для\s+", body, maxsplit=1)[0])
+
 # Note on domain remapping: previously a global rule rewrote
 # <localpart>@fluytstudio.net → <localpart>.ff@playrix.com. That's now handled
 # inside individual plugins (svc_figma.invite remaps; svc_chatgpt.invite does
@@ -49,21 +87,46 @@ ROLE_HINT_RE = re.compile(r"->\s*([A-Za-zА-Яа-я]+)\b")
 # original address). Keep the parsed target email unchanged here.
 
 
-def parse_task(task: dict) -> dict[str, str]:
-    """Pull service / target email / role hint out of an access-request task."""
+def parse_task(task: dict) -> dict[str, Any]:
+    """Pull service / target email / role hint out of an access-request task.
+
+    Returns the keys `service`, `target`, `role` plus diagnostics:
+    `service_notes`, `service_title` (what each source yielded) and `warnings`
+    (a list of human-readable strings for the plan printer).
+
+    Service resolution prefers the structured `Имя сервиса:` line, but falls
+    back to the title when that field is a form placeholder ("Другое") — and
+    flags the case where the two sources disagree, since silently trusting the
+    notes has picked the wrong service on real tasks.
+    """
     title = task["name"].strip()
     notes = task.get("notes", "") or ""
+    warnings: list[str] = []
 
-    # Service name: prefer the structured `Имя сервиса:` line; fall back to the
-    # title between the prefix and " / Purchase Request".
     m = NOTES_FIELDS["service"].search(notes)
-    if m:
-        service = m.group(1).strip()
+    service_notes = _clean_service(m.group(1)) if m else ""
+    service_title = _service_from_title(title)
+
+    if service_notes and not _is_placeholder(service_notes):
+        service = service_notes
+        # Both sources named a service but they don't agree — the notes field
+        # has been wrong before (title "VTC" vs notes "LastPass"), so surface
+        # it instead of silently picking one.
+        if service_title and service_title.lower() != service_notes.lower():
+            warnings.append(
+                f"service mismatch: notes={service_notes!r} vs title={service_title!r} "
+                f"— using notes; verify manually"
+            )
+    elif service_title:
+        service = service_title
+        if service_notes:
+            warnings.append(
+                f"`Имя сервиса:` is a placeholder ({service_notes!r}) — "
+                f"using title {service_title!r}"
+            )
     else:
-        body = title[len(TITLE_PREFIX):] if title.startswith(TITLE_PREFIX) else title
-        body = TITLE_SUFFIX_RE.sub("", body)
-        # Title shape: "<Service> для <Name>"
-        service = re.split(r"\s+для\s+", body, maxsplit=1)[0].strip()
+        service = ""
+        warnings.append("no service name in either notes or title")
 
     # Target email: prefer the structured `email сотрудника:` field.
     m = NOTES_FIELDS["email"].search(notes)
@@ -72,15 +135,39 @@ def parse_task(task: dict) -> dict[str, str]:
         m = EMAIL_RE.search(notes)
         target = m.group(0) if m else ""
 
+    # If the body mentions other addresses, the requested access may be for a
+    # different account than the requester's (seen on a real task), so warn.
+    if target:
+        others = {e for e in EMAIL_RE.findall(notes) if e.lower() != target.lower()}
+        if others:
+            warnings.append(
+                "other email(s) in body — access may be for a different account: "
+                + ", ".join(sorted(others)[:3])
+            )
+
     # Role hint: "Путь к объекту: Figma -> Full" → "full".
     role = "full"
     m = NOTES_FIELDS["path"].search(notes)
     if m:
         rh = ROLE_HINT_RE.search(m.group(1))
         if rh:
-            role = rh.group(1).strip().lower()
+            candidate = rh.group(1).strip().lower()
+            # "-> Другое" is the form's placeholder, not a role a plugin knows.
+            if _is_placeholder(candidate):
+                warnings.append(
+                    f"role hint is a placeholder ({candidate!r}) — defaulting to 'full'"
+                )
+            else:
+                role = candidate
 
-    return {"service": service, "target": target, "role": role}
+    return {
+        "service": service,
+        "target": target,
+        "role": role,
+        "service_notes": service_notes,
+        "service_title": service_title,
+        "warnings": warnings,
+    }
 
 
 def fetch_one_task(task_gid: str) -> dict:
@@ -121,15 +208,22 @@ def print_plan(plan: list[dict], header: str) -> None:
             tag = f"[SKIP] {warn}"
         elif "missing-target" in statuses:
             tag = "[SKIP] could not parse target email from task"
+        elif "missing-service" in statuses:
+            tag = "[SKIP] no service name in task notes or title"
         else:
             tag = f"[?]    {', '.join(sorted(statuses))}"
 
-        print(f"\n  {service}  —  {len(rows)} task(s)  —  {tag}")
+        label = service or "<no service>"
+        print(f"\n  {label}  —  {len(rows)} task(s)  —  {tag}")
         for row in rows:
             print(
                 f"    • {row['target']:<40}  role={row['role']:<8}  "
                 f"({row['task']['gid']})"
             )
+            # Parsing ambiguities are easy to miss and have caused wrong-service
+            # / wrong-account picks, so print them per task.
+            for w in row.get("warnings", []):
+                print(f"        ! {w}")
 
 
 def main() -> int:
@@ -183,8 +277,10 @@ def main() -> int:
         role = parsed["role"]
         if service_filters and not any(f in _norm(service) for f in service_filters):
             continue
-        creds = load_creds(service)
-        if not creds:
+        creds = load_creds(service) if service else None
+        if not service:
+            status = "missing-service"
+        elif not creds:
             status = "missing-credentials"
         elif not target:
             status = "missing-target"
@@ -199,6 +295,7 @@ def main() -> int:
             "role": role,
             "creds": creds,
             "status": status,
+            "warnings": parsed.get("warnings", []),
         })
 
     if not plan:

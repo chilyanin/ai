@@ -34,7 +34,7 @@ from asana_client import (
 # Outcomes that mean the user is no longer active in the service → the Asana
 # task can be marked complete.
 COMPLETABLE_OUTCOMES = ("deactivated", "already-deactivated")
-from services import _slug, env_key, get_handler
+from services import _slug, env_key, get_handler, required_env
 from services._common import service_profile_dir
 
 TITLE_PREFIX = "Удалить из "
@@ -59,13 +59,16 @@ def parse_task(task: dict) -> tuple[str, str]:
         service = first_split[0] if first_split else ""
         remainder = first_split[1] if len(first_split) > 1 else ""
 
-    haystack = f"{remainder}\n{task.get('notes', '')}"
-    email = EMAIL_RE.search(haystack)
-    if email:
-        target = email.group(0)
-    else:
-        target = remainder.lstrip("-—–:|, ").strip() or "<missing>"
-    return service, target
+    # Preference order matters. Transfer-task titles carry the service account
+    # inside the service portion — "Syncsketch (darya.minina.ff@playrix.com) при
+    # переходе в Playrix - Дарья Минина" — so the whole title is searched before
+    # the notes, whose "Корпоративная почта" is a different address than the one
+    # the service actually knows.
+    for haystack in (remainder, rest, task.get("notes", "")):
+        email = EMAIL_RE.search(haystack)
+        if email:
+            return service, email.group(0)
+    return service, remainder.lstrip("-—–:|, ").strip() or "<missing>"
 
 
 def _first_env(*names: str) -> str | None:
@@ -88,6 +91,10 @@ def _env_key_candidates(service: str) -> list[str]:
     # stored under the canonical ADOBE_* keys.
     if key.startswith("ADOBE"):
         keys.append("ADOBE")
+    # "Syncsketch (RedBark)" / "Syncsketch (…) при переходе в Playrix" are the
+    # same workspace admin credential, stored under SYNCSKETCH_*.
+    if key.startswith("SYNCSKETCH"):
+        keys.append("SYNCSKETCH")
     return list(dict.fromkeys(keys))
 
 
@@ -174,6 +181,15 @@ def _missing_creds_fields(service: str) -> list[str]:
     and returns an empty list.
     """
     keys = _env_key_candidates(service)
+    # A plugin can declare exactly which fields it needs (API-mode plugins want
+    # LOGIN/TOKEN/… rather than the browser triple).
+    declared = required_env(service)
+    if declared:
+        return [
+            f
+            for f in declared
+            if not _first_env(*(n for key in keys for n in (f"SERVICE_{key}_{f}", f"{key}_{f}")))
+        ]
     if _first_env(*(n for key in keys for n in (f"SERVICE_{key}_TOKEN", f"{key}_TOKEN"))):
         return []
     # OAuth Server-to-Server mode: if any of the triple is set, treat this as
@@ -214,7 +230,10 @@ def print_plan(plan: list[dict], date: str) -> None:
         rows = by_service[service]
         n = len(rows)
         statuses = {r["status"] for r in rows}
-        key = env_key(service)
+        # Aliased services (Adobe/Unity/Syncsketch variants) read their creds
+        # from the canonical short key — name that one in the hint, not the
+        # long slug of the Asana service string.
+        key = _env_key_candidates(service)[-1]
 
         if statuses == {"ready"}:
             tag = "[OK]   ready"
@@ -359,7 +378,7 @@ def main() -> int:
         if target_filters and not any(f in target.lower() for f in target_filters):
             continue
         creds = load_creds(service)
-        if not creds:
+        if not creds or _missing_creds_fields(service):
             status = "missing-credentials"
         elif not _has_api_creds(creds) and not creds.get("url"):
             # Browser-mode plugin needs a URL; API-mode (token/OAuth) doesn't.
@@ -411,7 +430,7 @@ def main() -> int:
 
     for row in plan:
         gid = row["task"]["gid"]
-        if not row["creds"]:
+        if not row["creds"] or row["status"] == "missing-credentials":
             outcomes[gid] = "missing-credentials"
             continue
         # Browser-mode plugins need a URL; API-mode (token/OAuth) plugins don't.
