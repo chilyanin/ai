@@ -35,6 +35,11 @@ def _on_app(page) -> bool:
     return APP_HOSTNAME in page.url.lower()
 
 
+def _on_tfa_page(page) -> bool:
+    """True on Unity ID's "Security check" TOTP step (…/sign-in/tfa)."""
+    return "login.unity.com" in page.url.lower() and "/tfa" in page.url.lower()
+
+
 def _dismiss_cookie_banner(page) -> None:
     for label in ("Reject All", "Accept All", "Accept Cookies", "Cookie Settings"):
         btn = page.get_by_role("button", name=re.compile(rf"^{label}$", re.I)).first
@@ -71,38 +76,58 @@ def _login(page, creds: dict) -> bool:
         'input[name="userEmail"], input[autocomplete="username"], '
         'input[id*="email" i]'
     )
-    try:
-        email = page.locator(email_sel).first
-        email.wait_for(timeout=30_000)
-        email.fill(creds["login"])
-    except Exception:
-        # Unity may already have redirected us into Cloud via the persistent
-        # browser profile while we were waiting for the email field.
-        return _on_app(page) and not is_on_auth_page(page)
 
-    next_btn = page.get_by_role(
-        "button", name=re.compile(r"^(Next|Continue|Sign\s*in|Log\s*in)$", re.I)
-    ).first
-    if next_btn.count():
-        next_btn.click()
-    else:
-        email.press("Enter")
+    # Wait for whichever comes first: the email field (fresh login), the TFA
+    # "Security check" step (a persistent profile that remembers the password
+    # resumes directly on login.unity.com/…/sign-in/tfa — email/password are
+    # never shown), or a redirect straight into Cloud.
+    email = page.locator(email_sel).first
+    on_tfa = False
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if _on_tfa_page(page):
+            on_tfa = True
+            break
+        try:
+            if email.is_visible():
+                break
+        except Exception:
+            pass
+        if _on_app(page) and not is_on_auth_page(page):
+            return True
+        time.sleep(0.5)
 
-    pw_sel = 'input[type="password"], input#password, input[name="password"]'
-    try:
-        pw = page.locator(pw_sel).first
-        pw.wait_for(timeout=30_000)
-        pw.fill(creds["password"])
-    except Exception:
-        return _on_app(page) and not is_on_auth_page(page)
+    if not on_tfa:
+        try:
+            email.fill(creds["login"], timeout=5_000)
+        except Exception:
+            # Unity may already have redirected us into Cloud via the
+            # persistent browser profile while we were waiting.
+            return _on_app(page) and not is_on_auth_page(page)
 
-    sign_btn = page.get_by_role(
-        "button", name=re.compile(r"^(Sign\s*in|Log\s*in|Continue)$", re.I)
-    ).first
-    if sign_btn.count():
-        sign_btn.click()
-    else:
-        pw.press("Enter")
+        next_btn = page.get_by_role(
+            "button", name=re.compile(r"^(Next|Continue|Sign\s*in|Log\s*in)$", re.I)
+        ).first
+        if next_btn.count():
+            next_btn.click()
+        else:
+            email.press("Enter")
+
+        pw_sel = 'input[type="password"], input#password, input[name="password"]'
+        try:
+            pw = page.locator(pw_sel).first
+            pw.wait_for(timeout=30_000)
+            pw.fill(creds["password"])
+        except Exception:
+            return _on_app(page) and not is_on_auth_page(page)
+
+        sign_btn = page.get_by_role(
+            "button", name=re.compile(r"^(Sign\s*in|Log\s*in|Continue)$", re.I)
+        ).first
+        if sign_btn.count():
+            sign_btn.click()
+        else:
+            pw.press("Enter")
 
     submit_totp(page, "UNITY_2FA_SECRET")
 

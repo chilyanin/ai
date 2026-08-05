@@ -59,7 +59,11 @@ OTP_INPUT_SELECTORS = (
     'input[name="verificationCode"], '
     'input[id*="otp" i], '
     'input[id*="totp" i], '
-    'input[id*="code" i]'
+    'input[id*="code" i], '
+    # Unity's login.unity.com "Security check" page exposes the TOTP input
+    # only via its placeholder/aria-label ("Authentication code").
+    'input[placeholder*="code" i], '
+    'input[aria-label*="code" i]'
 )
 
 OTP_SUBMIT_NAME_RE = re.compile(
