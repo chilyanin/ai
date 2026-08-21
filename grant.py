@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Process Asana "Заявка на лицензию/доступ ..." tasks and invite users via browser.
+"""Process Asana "Доступ к ..." tasks and invite users via browser.
 
 Counterpart to deactivate.py — same .env, same persistent browser profile, same
 service-plugin convention. Plugins implementing access grants export an
 `invite(context, creds, target_user, role) -> str` function.
 
+Scope: only the onboarding template, titled "Доступ к <Service> - <ФИ>".
+The "Заявка на лицензию/доступ ..." purchase-request form is intentionally NOT
+handled — those tasks are procurement/partner/investigation requests that rarely
+map onto an `invite()` call, so they are left for manual processing.
+
 Usage:
-    ./grant.py --date 2026-05-19 --service figma --dry-run
-    ./grant.py --date 2026-05-19 --service figma --yes
-    ./grant.py --task 1214935218171397
+    ./grant.py --date 2026-08-24 --service figma --dry-run
+    ./grant.py --date 2026-08-24 --service adobe --yes
+    ./grant.py --task 1217366391048351
 """
 from __future__ import annotations
 
@@ -22,48 +27,70 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from asana_client import AsanaError, _get, fetch_tasks_due_on
+from asana_client import (
+    AsanaError,
+    _get,
+    complete_task,
+    create_task_comment,
+    fetch_tasks_due_on,
+    upload_task_attachment,
+)
 from deactivate import load_creds, _capture_shots
 from services import _slug, env_key
 from services._common import service_profile_dir
 
-TITLE_PREFIX = "Заявка на лицензию/доступ "
-TITLE_SUFFIX_RE = re.compile(r"\s*/\s*Purchase Request\s*$", re.I)
+# Onboarding template: "Доступ к <Service> - <ФИ>". The service name lives
+# ONLY in the title (this form has no `Имя сервиса:` field).
+TITLE_PREFIX = "Доступ к "
+# The person is separated from the service by a dash, a slash or "для". Service
+# names can themselves contain a dash or slash ("Microsoft Partner Center /
+# Windows Store"), so we split on the LAST separator, not the first.
+PERSON_SEP_RE = re.compile(r"\s+(?:[-–—/]|для)\s+")
 # Must end on an alphanumeric: the notes are prose, so a trailing sentence dot
 # ("...на maximt@playrix.com. Посмотрите") would otherwise be captured as part
 # of the address and read as a different account.
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]*\w")
 
-# Lines we lift out of the Russian access-request task body.
+# Lines we lift out of the Russian task body. The onboarding form uses
+# `Корпоративная почта:`, but some "Доступ к" tasks come from a support-request
+# variant that uses `email сотрудника:` instead, so both are read.
 NOTES_FIELDS = {
-    "service": re.compile(r"^\s*Имя сервиса:\s*(.+)$", re.M),
+    # `Сервис:` / `Роль:` sit at the very END of the onboarding body, after the
+    # LDAP and template blocks. They are the pair the request was built from,
+    # so they beat anything inferred from the title.
+    "service": re.compile(r"^\s*Сервис:\s*(.+)$", re.M),
+    "role": re.compile(r"^\s*Роль:\s*(.+)$", re.M),
     "path": re.compile(r"^\s*Путь к объекту:\s*(.+)$", re.M),
-    "email": re.compile(r"^\s*email сотрудника:\s*([\w.+-]+@[\w-]+\.[\w.-]+)", re.M),
+    "email": re.compile(r"^\s*email сотрудника:\s*([\w.+-]+@[\w-]+\.[\w.-]*\w)", re.M),
+    "corp_email": re.compile(
+        r"^\s*Корпоративная почта:\s*([\w.+-]+@[\w-]+\.[\w.-]*\w)", re.M
+    ),
     "ad_login": re.compile(r"^\s*логин ad:\s*(\S+)", re.M),
     "name": re.compile(r"^\s*ФИ:\s*(.+)$", re.M),
 }
 
-ROLE_HINT_RE = re.compile(r"->\s*([A-Za-zА-Яа-я]+)\b")
-
-# The request form's service/role dropdowns have an "Другое" ("Other") option.
-# When the requester picks it, `Имя сервиса:` literally reads "Другое" — a
-# placeholder, not a service. Trusting it produced env keys like `ДРУГОЕ`
-# (Cyrillic, unusable) and hid the real name, which lives in the title.
+# Asana's forms offer an "Другое" ("Other") option, which reaches us as a
+# literal service name and would yield an unusable env key like `ДРУГОЕ`
+# (Cyrillic). Treat it as "no service" rather than guessing.
 PLACEHOLDER_RE = re.compile(
     r"^(?:другое|прочее|other|misc|n/?a|нет|none|-{1,2}|—|–)$", re.I
 )
-# Asana auto-linkifies bare domains, so `Имя сервиса: Coda.io` arrives as
-# "http://Coda.io" and yielded the env key HTTP_CODA_IO.
+# Asana auto-linkifies bare domains, so a title mentioning "Coda.io" can arrive
+# as "http://Coda.io" and yielded the env key HTTP_CODA_IO.
 URL_SCHEME_RE = re.compile(r"^(?:https?|ftp)://", re.I)
-# Title shape is "<Service> для <Name>", but the service part is sometimes
-# absent entirely ("Заявка на лицензию/доступ для Машков Роман").
-TITLE_NO_SERVICE_RE = re.compile(r"^для\s+", re.I)
 
 
 def _clean_service(name: str) -> str:
-    """Normalize a service name: drop URL scheme, quotes, trailing slash."""
+    """Normalize a service name: drop URL scheme, quotes, decorations.
+
+    Onboarding titles prefix some services with a status emoji
+    ("🔄Adobe Creative Cloud (RedBark)"), which would otherwise end up in the
+    slug and env key. Only the LEADING junk is stripped — a trailing ")" is
+    part of the name ("Adobe Creative Cloud (RedBark)").
+    """
     s = name.strip().strip("«»\"'`").strip()
     s = URL_SCHEME_RE.sub("", s)
+    s = re.sub(r"^[^\w(]+", "", s)  # emoji / bullets / stray punctuation
     s = s.rstrip("/").strip()
     return s
 
@@ -75,10 +102,15 @@ def _is_placeholder(value: str) -> bool:
 def _service_from_title(title: str) -> str:
     """Extract the service name from the task title, or "" if absent."""
     body = title[len(TITLE_PREFIX):] if title.startswith(TITLE_PREFIX) else title
-    body = TITLE_SUFFIX_RE.sub("", body).strip()
-    if TITLE_NO_SERVICE_RE.match(body):
-        return ""  # title carries only the person's name
-    return _clean_service(re.split(r"\s+для\s+", body, maxsplit=1)[0])
+    body = body.strip()
+
+    # Trim the trailing "- <ФИ>" / "/ <ФИ>" / "для <ФИ>". Split on the LAST
+    # separator so a service name containing one survives intact
+    # ("Microsoft Partner Center / Windows Store - Иван Иванов").
+    if seps := list(PERSON_SEP_RE.finditer(body)):
+        body = body[: seps[-1].start()]
+
+    return _clean_service(body)
 
 # Note on domain remapping: previously a global rule rewrote
 # <localpart>@fluytstudio.net → <localpart>.ff@playrix.com. That's now handled
@@ -88,16 +120,14 @@ def _service_from_title(title: str) -> str:
 
 
 def parse_task(task: dict) -> dict[str, Any]:
-    """Pull service / target email / role hint out of an access-request task.
+    """Pull service / target email / role hint out of a "Доступ к ..." task.
 
-    Returns the keys `service`, `target`, `role` plus diagnostics:
-    `service_notes`, `service_title` (what each source yielded) and `warnings`
-    (a list of human-readable strings for the plan printer).
+    Returns the keys `service`, `target`, `role` plus `service_title` (what the
+    title yielded) and `warnings` (human-readable strings for the plan printer).
 
-    Service resolution prefers the structured `Имя сервиса:` line, but falls
-    back to the title when that field is a form placeholder ("Другое") — and
-    flags the case where the two sources disagree, since silently trusting the
-    notes has picked the wrong service on real tasks.
+    The service comes from the body's `Сервис:` line, falling back to the title
+    when that line is absent or holds the form's "Другое" placeholder. A
+    disagreement between the two is reported rather than silently resolved.
     """
     title = task["name"].strip()
     notes = task.get("notes", "") or ""
@@ -109,28 +139,35 @@ def parse_task(task: dict) -> dict[str, Any]:
 
     if service_notes and not _is_placeholder(service_notes):
         service = service_notes
-        # Both sources named a service but they don't agree — the notes field
-        # has been wrong before (title "VTC" vs notes "LastPass"), so surface
-        # it instead of silently picking one.
         if service_title and service_title.lower() != service_notes.lower():
             warnings.append(
-                f"service mismatch: notes={service_notes!r} vs title={service_title!r} "
-                f"— using notes; verify manually"
+                f"service mismatch: body={service_notes!r} vs title={service_title!r}"
+                " — using the body field; verify manually"
             )
-    elif service_title:
+    elif service_title and not _is_placeholder(service_title):
         service = service_title
         if service_notes:
             warnings.append(
-                f"`Имя сервиса:` is a placeholder ({service_notes!r}) — "
+                f"`Сервис:` is a placeholder ({service_notes!r}) — "
                 f"using title {service_title!r}"
             )
     else:
         service = ""
-        warnings.append("no service name in either notes or title")
+        warnings.append(
+            "no usable service name — body "
+            f"({service_notes or '∅'!r}) and title ({service_title or '∅'!r})"
+            " give nothing; read the task manually"
+        )
 
-    # Target email: prefer the structured `email сотрудника:` field.
-    m = NOTES_FIELDS["email"].search(notes)
-    target = m.group(1) if m else ""
+    # Target email: prefer the structured fields — `Корпоративная почта:` on the
+    # onboarding form, `email сотрудника:` on the support-request variant — and
+    # only then fall back to the first address anywhere in the body.
+    target = ""
+    for field in ("email", "corp_email"):
+        m = NOTES_FIELDS[field].search(notes)
+        if m:
+            target = m.group(1)
+            break
     if not target:
         m = EMAIL_RE.search(notes)
         target = m.group(0) if m else ""
@@ -145,26 +182,34 @@ def parse_task(task: dict) -> dict[str, Any]:
                 + ", ".join(sorted(others)[:3])
             )
 
-    # Role hint: "Путь к объекту: Figma -> Full" → "full".
+    # Role hint. The onboarding template carries it in a dedicated line
+    # ("Роль: Photoshop"); the support-request variant encodes it as the leaf
+    # of an object path ("Путь к объекту: Adobe -> After Effects"). The value
+    # is kept whole so multi-word products survive ("after effects", not
+    # "after"); chained paths resolve to the leaf segment.
     role = "full"
-    m = NOTES_FIELDS["path"].search(notes)
+    candidate = ""
+    m = NOTES_FIELDS["role"].search(notes)
     if m:
-        rh = ROLE_HINT_RE.search(m.group(1))
-        if rh:
-            candidate = rh.group(1).strip().lower()
-            # "-> Другое" is the form's placeholder, not a role a plugin knows.
-            if _is_placeholder(candidate):
-                warnings.append(
-                    f"role hint is a placeholder ({candidate!r}) — defaulting to 'full'"
-                )
-            else:
-                role = candidate
+        candidate = m.group(1).strip().lower()
+    else:
+        m = NOTES_FIELDS["path"].search(notes)
+        if m and "->" in m.group(1):
+            candidate = m.group(1).rsplit("->", 1)[1].strip().lower()
+    if not candidate:
+        pass  # no usable hint — keep the default
+    elif _is_placeholder(candidate):
+        # "Другое" is the form's placeholder, not a role a plugin knows.
+        warnings.append(
+            f"role hint is a placeholder ({candidate!r}) — defaulting to 'full'"
+        )
+    else:
+        role = candidate
 
     return {
         "service": service,
         "target": target,
         "role": role,
-        "service_notes": service_notes,
         "service_title": service_title,
         "warnings": warnings,
     }
@@ -226,6 +271,70 @@ def print_plan(plan: list[dict], header: str) -> None:
                 print(f"        ! {w}")
 
 
+# Outcomes that mean access is in place → the Asana task can be completed.
+# Adobe appends detail ("invited (added groups: Photoshop Configuration)"), so
+# these are matched as PREFIXES, not exact strings.
+COMPLETABLE_PREFIXES = ("invited", "already-invited", "already-member")
+# Outcomes worth a comment at all: the completable ones plus the terminal
+# "nothing to do" verdicts. Transient failures (needs-login, failed: …) are
+# left uncommented — they mean "re-run", not "here is the result".
+COMMENTABLE_PREFIXES = COMPLETABLE_PREFIXES + ("skipped:",)
+
+
+def _outcome_matches(outcome: str, prefixes: tuple[str, ...]) -> bool:
+    return any(outcome.startswith(p) for p in prefixes)
+
+
+def _comment_after_outcome(
+    row: dict, outcome: str, shots: list[str], complete: bool = True
+) -> str | None:
+    """Upload proof screenshots, comment, and (optionally) complete the task.
+
+    Mirrors deactivate.py's write-back so a grant leaves the same audit trail.
+    Returns None on success, or a compact error string if any Asana call failed.
+    """
+    if not _outcome_matches(outcome, COMMENTABLE_PREFIXES):
+        return None
+    gid = row["task"]["gid"]
+
+    try:
+        for shot in shots:
+            upload_task_attachment(gid, shot)
+
+        if outcome.startswith("invited"):
+            headline = "Access granted by automation."
+        elif outcome.startswith(("already-invited", "already-member")):
+            headline = "User already had access in the service."
+        else:
+            headline = "No action taken."
+        lines = [
+            headline,
+            f"Service: {row['service']}",
+            f"User: {row['target']}",
+            f"Role: {row['role']}",
+            f"Result: {outcome}",
+        ]
+        shot_names = [Path(s).name for s in shots]
+        if shot_names:
+            lines.append("Screenshot(s) attached:")
+            lines.extend(f"- {name}" for name in shot_names)
+        else:
+            # API-only plugins (e.g. Adobe UMAPI) never open a page.
+            lines.append("Screenshot: not available for this service.")
+
+        will_complete = complete and _outcome_matches(outcome, COMPLETABLE_PREFIXES)
+        if will_complete:
+            lines.append("Task marked complete by automation.")
+
+        create_task_comment(gid, "\n".join(lines))
+
+        if will_complete:
+            complete_task(gid)
+        return None
+    except AsanaError as e:
+        return str(e)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--date", help="Due date in YYYY-MM-DD (mutually exclusive with --task)")
@@ -237,6 +346,16 @@ def main() -> int:
     ap.add_argument("--headless", action="store_true", help="Run browser headless")
     ap.add_argument("--screenshot-dir", default="screenshots",
                     help="Where to save per-task screenshots (default: ./screenshots)")
+    ap.add_argument(
+        "--no-comment",
+        action="store_true",
+        help="Do NOT write the proof comment/attachment back to Asana",
+    )
+    ap.add_argument(
+        "--no-complete",
+        action="store_true",
+        help="Do NOT mark Asana tasks complete on success (default: mark complete)",
+    )
     args = ap.parse_args()
 
     if not args.date and not args.task:
@@ -252,12 +371,12 @@ def main() -> int:
         if args.task:
             tasks = [fetch_one_task(args.task)]
         else:
-            tasks = fetch_tasks_due_on(args.date, text_filter="Заявка на лицензию")
+            tasks = fetch_tasks_due_on(args.date, text_filter="Доступ к")
     except AsanaError as e:
         print(f"asana error: {e}", file=sys.stderr)
         return 1
 
-    matching = [t for t in tasks if t["name"].startswith(TITLE_PREFIX)]
+    matching = [t for t in tasks if t["name"].strip().startswith(TITLE_PREFIX)]
     if not matching:
         print(f"no matching access-request tasks")
         return 0
@@ -335,6 +454,7 @@ def main() -> int:
 
     outcomes: dict[str, str] = {}
     shots_by_gid: dict[str, list[str]] = {}
+    comment_errors: dict[str, str] = {}
 
     by_service: dict[str, list[dict]] = {}
     for row in ready:
@@ -370,6 +490,15 @@ def main() -> int:
                         outcome = f"failed: {type(e).__name__}: {e}"
                     outcomes[gid] = outcome
                     shots_by_gid[gid] = _capture_shots(context, shot_root, row, outcome)
+                    if not args.no_comment:
+                        comment_error = _comment_after_outcome(
+                            row,
+                            outcome,
+                            shots_by_gid[gid],
+                            complete=not args.no_complete,
+                        )
+                        if comment_error:
+                            comment_errors[gid] = comment_error
             finally:
                 context.close()
 
@@ -386,6 +515,8 @@ def main() -> int:
         )
         for shot in shots_by_gid.get(gid, []):
             print(f"    screenshot: {shot}")
+        if comment_errors.get(gid):
+            print(f"    asana-comment-error: {comment_errors[gid]}")
         if machine_log:
             print(f"RESULT|{gid}|{row['service']}|{row['target']}|{status}")
     return 0
