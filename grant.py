@@ -143,19 +143,19 @@ def parse_task(task: dict) -> dict[str, Any]:
         if service_title and service_title.lower() != service_notes.lower():
             warnings.append(
                 f"service mismatch: body={service_notes!r} vs title={service_title!r}"
-                " — using the body field; verify manually"
+                " - using the body field; verify manually"
             )
     elif service_title and not _is_placeholder(service_title):
         service = service_title
         if service_notes:
             warnings.append(
-                f"`Сервис:` is a placeholder ({service_notes!r}) — "
+                f"`Сервис:` is a placeholder ({service_notes!r}) - "
                 f"using title {service_title!r}"
             )
     else:
         service = ""
         warnings.append(
-            "no usable service name — body "
+            "no usable service name - body "
             f"({service_notes or 'none'!r}) and title ({service_title or 'none'!r})"
             " give nothing; read the task manually"
         )
@@ -179,7 +179,7 @@ def parse_task(task: dict) -> dict[str, Any]:
         others = {e for e in EMAIL_RE.findall(notes) if e.lower() != target.lower()}
         if others:
             warnings.append(
-                "other email(s) in body — access may be for a different account: "
+                "other email(s) in body - access may be for a different account: "
                 + ", ".join(sorted(others)[:3])
             )
 
@@ -202,7 +202,7 @@ def parse_task(task: dict) -> dict[str, Any]:
     elif _is_placeholder(candidate):
         # "Другое" is the form's placeholder, not a role a plugin knows.
         warnings.append(
-            f"role hint is a placeholder ({candidate!r}) — defaulting to 'full'"
+            f"role hint is a placeholder ({candidate!r}) - defaulting to 'full'"
         )
     else:
         role = candidate
@@ -241,7 +241,7 @@ def print_plan(plan: list[dict], header: str) -> None:
         by_service.setdefault(row["service"], []).append(row)
 
     total = len(plan)
-    print(f"\n=== {header} — {total} task(s) across {len(by_service)} service(s) ===")
+    print(f"\n=== {header} - {total} task(s) across {len(by_service)} service(s) ===")
     for service in sorted(by_service):
         rows = by_service[service]
         statuses = {r["status"] for r in rows}
@@ -266,10 +266,10 @@ def print_plan(plan: list[dict], header: str) -> None:
             tag = f"[?]    {', '.join(sorted(statuses))}"
 
         label = service or "<no service>"
-        print(f"\n  {label}  —  {len(rows)} task(s)  —  {tag}")
+        print(f"\n  {label}  -  {len(rows)} task(s)  -  {tag}")
         for row in rows:
             print(
-                f"    • {row['target']:<40}  role={row['role']:<8}  "
+                f"    * {row['target']:<40}  role={row['role']:<8}  "
                 f"({row['task']['gid']})"
             )
             if row.get("prior_comment"):
@@ -497,7 +497,7 @@ def main() -> int:
         # imply these tasks were checked and found clean.
         print(
             f"\n!! WARNING: could not read Asana comments for {len(guard_errors)} "
-            f"task(s) — the already-processed guard is NOT active for them."
+            f"task(s) - the already-processed guard is NOT active for them."
         )
         print(f"   {guard_errors[0]}")
         if "stories:read" in guard_errors[0]:

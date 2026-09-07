@@ -224,7 +224,7 @@ def print_plan(plan: list[dict], date: str) -> None:
         by_service.setdefault(row["service"], []).append(row)
 
     total = len(plan)
-    print(f"\n=== Plan for {date} — {total} task(s) across {len(by_service)} service(s) ===")
+    print(f"\n=== Plan for {date} - {total} task(s) across {len(by_service)} service(s) ===")
 
     for service in sorted(by_service):
         rows = by_service[service]
@@ -246,9 +246,9 @@ def print_plan(plan: list[dict], date: str) -> None:
         else:
             tag = f"[?]    {', '.join(sorted(statuses))}"
 
-        print(f"\n  {service}  —  {n} task(s)  —  {tag}")
+        print(f"\n  {service}  -  {n} task(s)  -  {tag}")
         for row in rows:
-            print(f"    • {row['target']:<45}  ({row['task']['gid']})")
+            print(f"    * {row['target']:<45}  ({row['task']['gid']})")
 
 
 def _comment_after_outcome(
