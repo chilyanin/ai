@@ -38,7 +38,7 @@ from asana_client import (
 )
 from deactivate import load_creds, _capture_shots
 from services import _slug, env_key
-from services._common import service_profile_dir
+from services._common import make_stdout_safe, service_profile_dir
 
 # Onboarding template: "Доступ к <Service> - <ФИ>". The service name lives
 # ONLY in the title (this form has no `Имя сервиса:` field).
@@ -156,7 +156,7 @@ def parse_task(task: dict) -> dict[str, Any]:
         service = ""
         warnings.append(
             "no usable service name — body "
-            f"({service_notes or '∅'!r}) and title ({service_title or '∅'!r})"
+            f"({service_notes or 'none'!r}) and title ({service_title or 'none'!r})"
             " give nothing; read the task manually"
         )
 
@@ -273,7 +273,9 @@ def print_plan(plan: list[dict], header: str) -> None:
                 f"({row['task']['gid']})"
             )
             if row.get("prior_comment"):
-                print(f"        ↩ prior comment: {row['prior_comment']}")
+                # ASCII only: this runs under the Windows scheduler, whose
+                # console codepage can't encode arrows and would crash the run.
+                print(f"        <- prior comment: {row['prior_comment']}")
             # Parsing ambiguities are easy to miss and have caused wrong-service
             # / wrong-account picks, so print them per task.
             for w in row.get("warnings", []):
@@ -381,6 +383,7 @@ def _comment_after_outcome(
 
 
 def main() -> int:
+    make_stdout_safe()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--date", help="Due date in YYYY-MM-DD (mutually exclusive with --task)")
     ap.add_argument("--task", help="Single Asana task GID to process")

@@ -35,7 +35,7 @@ from asana_client import (
 # task can be marked complete.
 COMPLETABLE_OUTCOMES = ("deactivated", "already-deactivated")
 from services import _slug, env_key, get_handler, required_env
-from services._common import service_profile_dir
+from services._common import make_stdout_safe, service_profile_dir
 
 TITLE_PREFIX = "Удалить из "
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
@@ -301,6 +301,7 @@ def _comment_after_outcome(
 
 
 def main() -> int:
+    make_stdout_safe()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--date", required=True, help="Due date in YYYY-MM-DD")
     ap.add_argument("--dry-run", action="store_true", help="Print plan and exit")

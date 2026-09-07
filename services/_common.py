@@ -472,3 +472,24 @@ def solve_cloudflare_turnstile(page) -> tuple[bool, str]:
 # support hCaptcha — its API rejects method=hcaptcha with ERROR_METHOD_CALL.
 # Adding an hCaptcha solver would require a different provider (2captcha,
 # CapSolver, Anti-Captcha, …). See services/svc_autodesk.py for context.
+
+
+def make_stdout_safe() -> None:
+    """Force UTF-8 on stdout/stderr, degrading unencodable characters.
+
+    Windows consoles default to a legacy codepage (cp1251 here), which cannot
+    encode plenty of what flows through this output: emoji that Asana puts in
+    service names ("🔄Adobe Creative Cloud"), arrows/symbols in our own
+    formatting, or a non-Cyrillic letter in a user's name. A scheduled run must
+    never die on a `print`, so replace unencodable characters instead of
+    raising UnicodeEncodeError.
+
+    Safe to call more than once; a no-op where reconfigure isn't available.
+    """
+    import sys
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
