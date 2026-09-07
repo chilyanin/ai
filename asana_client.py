@@ -134,6 +134,19 @@ def create_task_comment(task_gid: str, text: str) -> dict:
     return _post_json(f"/tasks/{task_gid}/stories", {"data": {"text": text}})
 
 
+def fetch_task_comments(task_gid: str) -> list[dict]:
+    """Return the task's comment stories (system events filtered out).
+
+    Used to detect a proof comment a previous automation run already left, so
+    the runner can skip re-doing the action.
+    """
+    stories = _get(
+        f"/tasks/{task_gid}/stories",
+        params={"opt_fields": "type,resource_subtype,text,created_at,created_by.name"},
+    )
+    return [s for s in stories if s.get("type") == "comment"]
+
+
 def complete_task(task_gid: str) -> dict:
     """Mark a task as completed."""
     return _put_json(f"/tasks/{task_gid}", {"data": {"completed": True}})

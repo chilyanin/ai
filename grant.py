@@ -32,6 +32,7 @@ from asana_client import (
     _get,
     complete_task,
     create_task_comment,
+    fetch_task_comments,
     fetch_tasks_due_on,
     upload_task_attachment,
 )
@@ -246,6 +247,12 @@ def print_plan(plan: list[dict], header: str) -> None:
         statuses = {r["status"] for r in rows}
         if statuses == {"ready"}:
             tag = "[OK]   ready"
+        elif statuses == {"already-processed"}:
+            tag = "[DONE] already has an automation comment (use --force to re-run)"
+        elif statuses <= {"ready", "already-processed"}:
+            # Common on a re-run: part of the day is done, the rest is new.
+            n_ready = sum(1 for r in rows if r["status"] == "ready")
+            tag = f"[OK]   {n_ready} to run, {len(rows) - n_ready} already done"
         elif "missing-credentials" in statuses:
             tag = f"[SKIP] missing creds for {env_key(service)}"
         elif "missing-invite" in statuses:
@@ -265,6 +272,8 @@ def print_plan(plan: list[dict], header: str) -> None:
                 f"    • {row['target']:<40}  role={row['role']:<8}  "
                 f"({row['task']['gid']})"
             )
+            if row.get("prior_comment"):
+                print(f"        ↩ prior comment: {row['prior_comment']}")
             # Parsing ambiguities are easy to miss and have caused wrong-service
             # / wrong-account picks, so print them per task.
             for w in row.get("warnings", []):
@@ -280,9 +289,42 @@ COMPLETABLE_PREFIXES = ("invited", "already-invited", "already-member")
 # left uncommented — they mean "re-run", not "here is the result".
 COMMENTABLE_PREFIXES = COMPLETABLE_PREFIXES + ("skipped:",)
 
+# Stamped into every comment this runner writes, and looked for on re-runs so a
+# task that already has a proof comment is not acted on twice. Kept on its own
+# line and deliberately unglamorous — it is a machine marker, not prose.
+AUTOMATION_MARKER = "[grant-bot]"
+# Comments written before the marker existed are still recognised by their
+# headline, so the very first re-run after this change doesn't re-invite.
+LEGACY_HEADLINES = (
+    "Access granted by automation.",
+    "User already had access in the service.",
+)
+
 
 def _outcome_matches(outcome: str, prefixes: tuple[str, ...]) -> bool:
     return any(outcome.startswith(p) for p in prefixes)
+
+
+def _existing_automation_comment(task_gid: str) -> str | None:
+    """Return a short description of a prior automation comment, or None.
+
+    Asana is the source of truth here: the services themselves have their own
+    idempotency guards (Figma's "already-invited", Adobe's "already-member"),
+    but those still cost a login and a page load. Checking the task first makes
+    a re-run cheap and, for plugins without such a guard, safe.
+
+    Raises AsanaError if the comments can't be read — the caller must decide,
+    loudly, whether to proceed without the guard. Swallowing that made the
+    whole feature a silent no-op on a token lacking `stories:read`.
+    """
+    comments = fetch_task_comments(task_gid)
+    for c in comments:
+        text = c.get("text") or ""
+        if AUTOMATION_MARKER in text or any(h in text for h in LEGACY_HEADLINES):
+            when = (c.get("created_at") or "")[:10]
+            first = text.strip().splitlines()[0][:60] if text.strip() else "(empty)"
+            return f"{first} ({when})" if when else first
+    return None
 
 
 def _comment_after_outcome(
@@ -325,6 +367,9 @@ def _comment_after_outcome(
         will_complete = complete and _outcome_matches(outcome, COMPLETABLE_PREFIXES)
         if will_complete:
             lines.append("Task marked complete by automation.")
+        # Marker last, so a re-run can recognise this comment even if the
+        # wording above changes.
+        lines.append(AUTOMATION_MARKER)
 
         create_task_comment(gid, "\n".join(lines))
 
@@ -355,6 +400,12 @@ def main() -> int:
         "--no-complete",
         action="store_true",
         help="Do NOT mark Asana tasks complete on success (default: mark complete)",
+    )
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-run tasks that already carry an automation comment "
+             "(default: skip them)",
     )
     args = ap.parse_args()
 
@@ -389,6 +440,7 @@ def main() -> int:
     service_filters = [_norm(s) for s in args.service]
 
     plan: list[dict[str, Any]] = []
+    guard_errors: list[str] = []
     for t in matching:
         parsed = parse_task(t)
         service = parsed["service"]
@@ -407,6 +459,16 @@ def main() -> int:
             status = "missing-invite"
         else:
             status = "ready"
+        # Only worth an API call for tasks we would otherwise act on.
+        prior = None
+        if status == "ready" and not args.force:
+            try:
+                prior = _existing_automation_comment(t["gid"])
+            except AsanaError as e:
+                guard_errors.append(str(e))
+            else:
+                if prior:
+                    status = "already-processed"
         plan.append({
             "task": t,
             "service": service,
@@ -415,6 +477,7 @@ def main() -> int:
             "creds": creds,
             "status": status,
             "warnings": parsed.get("warnings", []),
+            "prior_comment": prior,
         })
 
     if not plan:
@@ -426,6 +489,21 @@ def main() -> int:
     if service_filters:
         print(f"  (filtered to services matching: {', '.join(args.service)})")
 
+    if guard_errors:
+        # The re-run guard is inoperative — say so instead of letting the plan
+        # imply these tasks were checked and found clean.
+        print(
+            f"\n!! WARNING: could not read Asana comments for {len(guard_errors)} "
+            f"task(s) — the already-processed guard is NOT active for them."
+        )
+        print(f"   {guard_errors[0]}")
+        if "stories:read" in guard_errors[0]:
+            print(
+                "   The token lacks `stories:read`. Re-mint it with that scope "
+                "(or full permissions) to enable the guard."
+            )
+        print("   Re-running may repeat an action that was already performed.")
+
     if args.dry_run:
         return 0
 
@@ -435,7 +513,10 @@ def main() -> int:
         return 0
 
     if not args.yes:
-        ans = input("\nproceed with invites? [y/N] ").strip().lower()
+        prompt = "\nproceed with invites? [y/N] "
+        if guard_errors:
+            prompt = "\nproceed WITHOUT the already-processed guard? [y/N] "
+        ans = input(prompt).strip().lower()
         if ans != "y":
             print("aborted")
             return 0

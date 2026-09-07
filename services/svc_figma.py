@@ -402,6 +402,31 @@ ROLE_LABELS = {
     "dev": re.compile(r"\bDev(\s+seat)?\b", re.I),
 }
 
+# Asana's "Роль:" field is filled by humans and doesn't use our key names —
+# real tasks carry "view", not "viewer". An unrecognised role must NOT quietly
+# fall back to "full": that grants a more expensive, more privileged seat than
+# was asked for, so it is refused instead (see _select_invite_role).
+ROLE_ALIASES = {
+    "full": "full",
+    "full seat": "full",
+    "editor": "editor",
+    "edit": "editor",
+    "can edit": "editor",
+    "viewer": "viewer",
+    "view": "viewer",
+    "can view": "viewer",
+    "restricted": "viewer",
+    "dev": "dev",
+    "dev seat": "dev",
+    "developer": "dev",
+}
+
+
+def _resolve_role(role: str) -> str | None:
+    """Map a task's role string onto a ROLE_LABELS key, or None if unknown."""
+    key = re.sub(r"\s+", " ", (role or "").strip().lower())
+    return ROLE_ALIASES.get(key)
+
 
 def _ensure_on_people(page, creds) -> str | None:
     """Reach Admin → People, handling fresh login + cached-session cases.
@@ -529,7 +554,14 @@ def _select_invite_role(dialog, role: str) -> str | None:
     """Pick the seat/role in the invite dialog. Returns None on success or a
     'failed: ...' status. If no role picker is visible (org defaults to one
     seat type), returns None — the default is accepted."""
-    pattern = ROLE_LABELS.get(role.lower(), ROLE_LABELS["full"])
+    resolved = _resolve_role(role)
+    if resolved is None:
+        # Refuse rather than escalate to Full — see ROLE_ALIASES.
+        return (
+            f"needs-confirmation: unknown Figma seat {role!r} "
+            f"(known: {', '.join(sorted(set(ROLE_ALIASES.values())))})"
+        )
+    pattern = ROLE_LABELS[resolved]
 
     trigger = _find_seat_trigger(dialog)
     if trigger is None:
@@ -654,6 +686,14 @@ def invite(context, creds: dict, target_user: str, role: str = "full") -> str:
       "failed: <reason>"        — Stopped before any destructive click.
     """
     target_user = _remap_partner_email(target_user)
+
+    # Validate the seat BEFORE touching the UI: an unknown role used to fall
+    # back to "full", silently granting more than the task asked for.
+    if _resolve_role(role) is None:
+        return (
+            f"needs-confirmation: unknown Figma seat {role!r} "
+            f"(known: {', '.join(sorted(set(ROLE_ALIASES.values())))})"
+        )
 
     page = get_page(context, "figma")
     page.set_default_timeout(DEFAULT_TIMEOUT)
