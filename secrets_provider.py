@@ -26,6 +26,15 @@ Configuration (env or .env, none of it secret)
     VAULT_CRED_FILE     %LOCALAPPDATA%\\vault-cred.xml      (default)
     VAULT_TOKEN         short-circuits auth entirely        (optional)
     SECRETS_BACKEND     vault | env | auto                  (default: auto)
+    VAULT_CACERT        path to the internal root CA .pem   (optional)
+    VAULT_SKIP_VERIFY   1 to disable TLS verification       (NOT recommended)
+
+TLS: Vault sits behind an internal CA. `requests` trusts only certifi's public
+roots, so verification fails where PowerShell succeeds (Windows already trusts
+the corporate root). Install `truststore` and the OS trust store is used
+automatically; otherwise point VAULT_CACERT at the root certificate. Disabling
+verification exposes the LDAP token and every secret to anyone who can
+intercept the connection, so it stays an explicit, noisy opt-in.
 
 `auto` uses Vault when VAULT_ADDR is set and falls back to `.env` otherwise —
 and says out loud which one it used, so a silent regression to the plaintext
@@ -52,6 +61,56 @@ PS_TIMEOUT = 60
 
 class SecretsError(RuntimeError):
     pass
+
+
+def _use_os_trust_store() -> bool:
+    """Make TLS verification use the OS trust store instead of certifi's bundle.
+
+    Vault here is fronted by an internal CA. PowerShell succeeds because
+    Windows already trusts that root; `requests` fails because certifi ships
+    only public roots. `truststore` bridges the two, so the corporate CA is
+    honoured with no extra configuration and verification stays ON.
+
+    Optional dependency: absent, we fall back to VAULT_CACERT.
+    """
+    try:
+        import truststore  # type: ignore
+    except ImportError:
+        return False
+    try:
+        truststore.inject_into_ssl()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _tls_verify() -> bool | str:
+    """Resolve the `verify=` argument for Vault requests.
+
+    Order: explicit CA bundle (VAULT_CACERT) > OS trust store > certifi.
+    VAULT_SKIP_VERIFY is an escape hatch and says so, loudly, every time.
+    """
+    if (os.environ.get("VAULT_SKIP_VERIFY") or "").lower() in ("1", "true", "yes"):
+        print(
+            "[secrets] WARNING: VAULT_SKIP_VERIFY is set - the Vault TLS "
+            "certificate is NOT verified. Anyone able to intercept this "
+            "connection can read the LDAP token and every secret. Use "
+            "VAULT_CACERT instead.",
+            file=sys.stderr,
+        )
+        import urllib3
+
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        return False
+
+    cacert = os.environ.get("VAULT_CACERT")
+    if cacert:
+        if not Path(cacert).is_file():
+            raise SecretsError(f"VAULT_CACERT points at a missing file: {cacert}")
+        return cacert
+
+    _use_os_trust_store()
+    return True
 
 
 # PowerShell does the DPAPI decrypt and the LDAP login, then prints just the
@@ -152,13 +211,25 @@ def fetch_vault_secrets() -> dict[str, str]:
     mount = os.environ.get("VAULT_LDAP_MOUNT", DEFAULT_LDAP_MOUNT)
     cred_file = os.environ.get("VAULT_CRED_FILE", DEFAULT_CRED_FILE)
 
+    verify = _tls_verify()
     token = _vault_token(addr, mount, cred_file)
     try:
         r = requests.get(
             f"{addr}/v1/{path}",
             headers={"X-Vault-Token": token},
             timeout=HTTP_TIMEOUT,
+            verify=verify,
         )
+    except requests.exceptions.SSLError as e:
+        raise SecretsError(
+            f"Vault TLS verification failed: {e}\n"
+            "  Vault is behind an internal CA that Python does not trust "
+            "(PowerShell works because Windows already trusts it).\n"
+            "  Fix, best first:\n"
+            "    1. pip install truststore   - uses the OS trust store, no config\n"
+            "    2. VAULT_CACERT=<path to the corporate root CA .pem>\n"
+            "    3. VAULT_SKIP_VERIFY=1      - last resort, disables verification"
+        ) from None
     except requests.RequestException as e:
         raise SecretsError(f"Vault request failed: {type(e).__name__}: {e}") from None
     if r.status_code == 403:

@@ -5,3 +5,7 @@ playwright-stealth>=2.0
 solvecaptcha-python>=1.0
 flask>=3.0
 browser-use>=0.12.6
+
+# Uses the OS trust store for TLS so Vault behind an internal CA verifies
+# without pinning a .pem. Optional: secrets_provider falls back to VAULT_CACERT.
+truststore>=0.9
