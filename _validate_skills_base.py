@@ -12,9 +12,9 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+from secrets_provider import load_secrets
 
-load_dotenv()
+load_secrets()
 os.environ["DEACTIVATE_FIND_ONLY"] = "1"
 
 from services._common import service_profile_dir  # noqa: E402

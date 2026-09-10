@@ -16,9 +16,9 @@ from __future__ import annotations
 import os
 import sys
 
-from dotenv import load_dotenv
+from secrets_provider import load_secrets
 
-load_dotenv()
+load_secrets()
 os.environ["DEACTIVATE_FIND_ONLY"] = "1"
 
 from services import svc_syncsketch as svc  # noqa: E402

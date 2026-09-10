@@ -41,7 +41,7 @@ import urllib.parse
 import webbrowser
 
 import requests
-from dotenv import load_dotenv
+from secrets_provider import load_secrets
 
 AUTHORIZE_URL = "https://app.asana.com/-/oauth_authorize"
 TOKEN_URL = "https://app.asana.com/-/oauth_token"
@@ -106,7 +106,7 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
+    load_secrets()
     client_id = os.environ.get("ASANA_CLIENT_ID")
     client_secret = os.environ.get("ASANA_CLIENT_SECRET")
     if not (client_id and client_secret):

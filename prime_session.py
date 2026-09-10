@@ -19,7 +19,7 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+from secrets_provider import load_secrets
 
 
 def main() -> int:
@@ -30,7 +30,7 @@ def main() -> int:
                     help="Seconds to keep the window open after page-load (default: 900 = 15 min)")
     args = ap.parse_args()
 
-    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
+    load_secrets()
 
     key = args.service.upper().replace("-", "_")
     url = args.url or os.environ.get(f"SERVICE_{key}_URL") or os.environ.get(f"{key}_URL")

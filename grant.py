@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
+from secrets_provider import SecretsError, load_secrets
 
 from asana_client import (
     AsanaError,
@@ -419,7 +419,11 @@ def main() -> int:
         print(f"error: --date must be YYYY-MM-DD, got {args.date!r}", file=sys.stderr)
         return 2
 
-    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
+    try:
+        load_secrets()
+    except SecretsError as e:
+        print(f"secrets error: {e}", file=sys.stderr)
+        return 2
 
     try:
         if args.task:

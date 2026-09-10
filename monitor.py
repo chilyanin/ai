@@ -23,7 +23,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from dotenv import load_dotenv
+from secrets_provider import SecretsError, load_secrets
 from flask import Flask, jsonify, render_template_string, request
 
 # Reuse the existing Asana client + the monitor package we just built.
@@ -1047,7 +1047,11 @@ def main() -> int:
                     help="Run a single snapshot then exit (no web server)")
     args = ap.parse_args()
 
-    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
+    try:
+        load_secrets()
+    except SecretsError as e:
+        print(f"secrets error: {e}", file=sys.stderr)
+        return 2
     init_db()
 
     if args.once:

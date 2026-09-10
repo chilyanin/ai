@@ -48,6 +48,8 @@ dist/
 
 # dotenv environment variable files
 .env
+.env*
+!.env.example
 
 # Playwright/Chromium persistent browser profiles — contain live session
 # cookies and auth tokens; must never be committed.

@@ -369,11 +369,9 @@ def _main() -> int:
     """`python3 -m services.svc_syncsketch --accounts` — list workspace ids."""
     import sys
 
-    from dotenv import load_dotenv
+    from secrets_provider import load_secrets
 
-    load_dotenv(
-        dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
-    )
+    load_secrets()
     login = os.environ.get("SYNCSKETCH_LOGIN")
     token = os.environ.get("SYNCSKETCH_TOKEN")
     if not (login and token):
