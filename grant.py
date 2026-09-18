@@ -36,7 +36,7 @@ from asana_client import (
     fetch_tasks_due_on,
     upload_task_attachment,
 )
-from deactivate import load_creds, _capture_shots
+from deactivate import _capture_shots, _env_key_candidates, load_creds
 from services import _slug, env_key
 from services._common import make_stdout_safe, service_profile_dir
 
@@ -307,6 +307,52 @@ def _outcome_matches(outcome: str, prefixes: tuple[str, ...]) -> bool:
     return any(outcome.startswith(p) for p in prefixes)
 
 
+# Per-service headline for a successful invite, keyed by the CANONICAL env key
+# (aliases collapsed, see deactivate._env_key_candidates). `{product}` is the
+# requested role/product from the task, title-cased ("photoshop" -> "Photoshop").
+GRANT_HEADLINES = {
+    "FIGMA": "Инвайт отправлен",
+    "ADOBE": "Лицензия {product} выдана",
+    "CHATGPT": "Приглашение в ChatGPT Team отправлено",
+    "CHATGPT_TEAM": "Приглашение в ChatGPT Team отправлено",
+}
+DEFAULT_GRANT_HEADLINE = "Доступ выдан автоматически"
+
+# Shown when svc_figma rewrote a partner address. The person reading the task
+# will otherwise look for the wrong login - and try the Google button, which
+# doesn't work for the mirror account.
+FIGMA_REMAP_NOTE = (
+    "В рамках этой задачи доступ к сервису предоставлен через группу рассылки "
+    "{addr} с дальнейшей пересылкой писем на основной аккаунт. Вход "
+    "осуществляется с логином и паролем, предварительно приняв инвайт на почте. "
+    "Вы принимаете инвайт, в качестве логина используете {addr}, пароль "
+    "придумываете. Вход НЕ по кнопке гугл и НЕ используя аккаунт fluyt."
+)
+
+
+def _canonical_key(service: str) -> str:
+    return _env_key_candidates(service)[-1]
+
+
+def _headline_for(service: str, outcome: str, role: str) -> str:
+    if outcome.startswith(("already-invited", "already-member")):
+        return f"Пользователь уже имеет доступ к {service}"
+    if outcome.startswith("skipped:"):
+        return "Действий не выполнено"
+    template = GRANT_HEADLINES.get(_canonical_key(service), DEFAULT_GRANT_HEADLINE)
+    return template.format(product=(role or "").strip().title() or service)
+
+
+def _figma_remap(service: str, target: str) -> str | None:
+    """The address Figma was actually invited with, if it differs from the task's."""
+    if _canonical_key(service) != "FIGMA":
+        return None
+    from services.svc_figma import _remap_partner_email  # plugin owns the rule
+
+    remapped = _remap_partner_email(target)
+    return remapped if remapped.lower() != target.lower() else None
+
+
 def _existing_automation_comment(task_gid: str) -> str | None:
     """Return a short description of a prior automation comment, or None.
 
@@ -345,19 +391,19 @@ def _comment_after_outcome(
         for shot in shots:
             upload_task_attachment(gid, shot)
 
-        if outcome.startswith("invited"):
-            headline = "Access granted by automation."
-        elif outcome.startswith(("already-invited", "already-member")):
-            headline = "User already had access in the service."
-        else:
-            headline = "No action taken."
+        remapped = _figma_remap(row["service"], row["target"])
+        user_line = (
+            f"User: {row['target']} -> {remapped}" if remapped else f"User: {row['target']}"
+        )
         lines = [
-            headline,
+            _headline_for(row["service"], outcome, row["role"]),
             f"Service: {row['service']}",
-            f"User: {row['target']}",
+            user_line,
             f"Role: {row['role']}",
             f"Result: {outcome}",
         ]
+        if remapped and outcome.startswith("invited"):
+            lines += ["", FIGMA_REMAP_NOTE.format(addr=remapped), ""]
         shot_names = [Path(s).name for s in shots]
         if shot_names:
             lines.append("Screenshot(s) attached:")

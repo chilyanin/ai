@@ -27,6 +27,7 @@ from asana_client import (
     AsanaError,
     complete_task,
     create_task_comment,
+    fetch_task_comments,
     fetch_tasks_due_on,
     upload_task_attachment,
 )
@@ -237,6 +238,12 @@ def print_plan(plan: list[dict], date: str) -> None:
 
         if statuses == {"ready"}:
             tag = "[OK]   ready"
+        elif statuses == {"already-processed"}:
+            tag = "[DONE] already has an automation comment (use --force to re-run)"
+        elif statuses <= {"ready", "already-processed"}:
+            # Common on a re-run: part of the day is done, the rest is new.
+            n_ready = sum(1 for r in rows if r["status"] == "ready")
+            tag = f"[OK]   {n_ready} to run, {n - n_ready} already done"
         elif "missing-credentials" in statuses:
             missing = _missing_creds_fields(service)
             keys = ", ".join(f"{key}_{f}" for f in missing) if missing else "<unknown>"
@@ -249,6 +256,85 @@ def print_plan(plan: list[dict], date: str) -> None:
         print(f"\n  {service}  -  {n} task(s)  -  {tag}")
         for row in rows:
             print(f"    * {row['target']:<45}  ({row['task']['gid']})")
+            if row.get("prior_comment"):
+                # ASCII only: this runs under the Windows scheduler, whose
+                # console codepage can't encode arrows.
+                print(f"        <- prior comment: {row['prior_comment']}")
+
+
+# Stamped into every comment this runner writes, and looked for on re-runs so a
+# task that already has a proof comment is not acted on twice. Kept on its own
+# line and deliberately unglamorous - it is a machine marker, not prose.
+AUTOMATION_MARKER = "[deactivate-bot]"
+# Comments written before the marker existed are still recognised by their
+# headline, so the first re-run after this change doesn't redo a deactivation.
+# "User not found in <Service>." carries a service name, hence prefix matching.
+LEGACY_HEADLINES = (
+    "Deactivation completed by automation.",
+    "User was already deactivated in the service.",
+    "User not found in ",
+)
+
+# Per-service headline for a successful deactivation, keyed by the CANONICAL
+# env key so aliases collapse ("Unity (Enterprise)" and "Unity (Pro + ...)" are
+# both UNITY; "Skills Base" is an alias of SKILLS_BASE_PROGRAMMERS).
+# `{product}` is the service name without its org suffix, e.g.
+# "Adobe Creative Cloud (RedBark)" -> "Adobe Creative Cloud".
+# Maxon is deliberately absent: its plugin stops at login and performs no
+# deactivation yet, so a "revoked" headline would be a lie.
+SERVICE_HEADLINES = {
+    "FIGMA": "Пользователь удалён из организации Playrix",
+    "ADOBE": "Лицензия {product} отозвана",
+    "UNITY": "Доступ к Unity отозван",
+    "SLACK_WORKSPACE_REDBARK2": "Аккаунт деактивирован в админке",
+    "PLASTIC_SCM": "Доступ к Plastic SCM отозван",
+    "SKILLS_BASE_PROGRAMMERS": "Профиль Skills Base удалён",
+    "SKILLS_BASE": "Профиль Skills Base удалён",
+    "AUTODESK": "Доступ к Autodesk отозван",
+    "SYNCSKETCH": "Аккаунт удалён",
+}
+DEFAULT_HEADLINE = "Деактивация выполнена автоматически"
+
+
+def _canonical_key(service: str) -> str:
+    """Env key with aliases collapsed (UNITY_ENTERPRISE -> UNITY, etc.)."""
+    return _env_key_candidates(service)[-1]
+
+
+def _product_name(service: str) -> str:
+    """'Adobe Creative Cloud (RedBark)' -> 'Adobe Creative Cloud'."""
+    return re.sub(r"\s*\([^)]*\)\s*$", "", service).strip() or service
+
+
+def _headline_for(service: str, outcome: str) -> str:
+    if outcome == "already-deactivated":
+        return f"Пользователь уже был деактивирован в {service}"
+    if outcome == "user-not-found":
+        return f"Пользователь не найден в {service}"
+    template = SERVICE_HEADLINES.get(_canonical_key(service), DEFAULT_HEADLINE)
+    return template.format(product=_product_name(service))
+
+
+def _existing_automation_comment(task_gid: str) -> str | None:
+    """Return a short description of a prior automation comment, or None.
+
+    Asana is the source of truth here: plugins have their own idempotency
+    checks (e.g. "already-deactivated"), but those still cost a login and a
+    page load, and a plugin without one would repeat the action. Checking the
+    task first makes a re-run cheap and safe.
+
+    Raises AsanaError if the comments can't be read - the caller must decide,
+    loudly, whether to proceed without the guard. Swallowing that would turn
+    the feature into a silent no-op on a token lacking `stories:read`.
+    """
+    comments = fetch_task_comments(task_gid)
+    for c in comments:
+        text = c.get("text") or ""
+        if AUTOMATION_MARKER in text or any(h in text for h in LEGACY_HEADLINES):
+            when = (c.get("created_at") or "")[:10]
+            first = text.strip().splitlines()[0][:60] if text.strip() else "(empty)"
+            return f"{first} ({when})" if when else first
+    return None
 
 
 def _comment_after_outcome(
@@ -269,14 +355,8 @@ def _comment_after_outcome(
             upload_task_attachment(gid, shot)
 
         shot_names = [Path(s).name for s in shots]
-        if outcome == "deactivated":
-            headline = "Deactivation completed by automation."
-        elif outcome == "already-deactivated":
-            headline = "User was already deactivated in the service."
-        else:
-            headline = f"User not found in {row['service']}."
         lines = [
-            headline,
+            _headline_for(row["service"], outcome),
             f"Service: {row['service']}",
             f"User: {row['target']}",
             f"Result: {outcome}",
@@ -290,6 +370,9 @@ def _comment_after_outcome(
         will_complete = complete and outcome in COMPLETABLE_OUTCOMES
         if will_complete:
             lines.append("Task marked complete by automation.")
+        # Marker last, so a re-run can recognise this comment even if the
+        # wording above changes.
+        lines.append(AUTOMATION_MARKER)
 
         create_task_comment(gid, "\n".join(lines))
 
@@ -341,6 +424,12 @@ def main() -> int:
         action="store_true",
         help="Do NOT mark Asana tasks complete on success (default: mark complete)",
     )
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-run tasks that already carry an automation comment "
+             "(default: skip them)",
+    )
     args = ap.parse_args()
     if args.find_only:
         os.environ["DEACTIVATE_FIND_ONLY"] = "1"
@@ -376,6 +465,7 @@ def main() -> int:
     target_filters = [s.lower() for s in args.target]
 
     plan: list[dict[str, Any]] = []
+    guard_errors: list[str] = []
     for t in matching:
         service, target = parse_task(t)
         if service_filters and not any(f in _norm(service) for f in service_filters):
@@ -390,12 +480,23 @@ def main() -> int:
             status = "missing-url"
         else:
             status = "ready"
+        # Only worth an API call for tasks we would otherwise act on.
+        prior = None
+        if status == "ready" and not args.force:
+            try:
+                prior = _existing_automation_comment(t["gid"])
+            except AsanaError as e:
+                guard_errors.append(str(e))
+            else:
+                if prior:
+                    status = "already-processed"
         plan.append({
             "task": t,
             "service": service,
             "target": target,
             "creds": creds,
             "status": status,
+            "prior_comment": prior,
         })
 
     if not plan:
@@ -412,11 +513,29 @@ def main() -> int:
     if service_filters:
         print(f"  (filtered to services matching: {', '.join(args.service)})")
 
+    if guard_errors:
+        # The re-run guard is inoperative - say so instead of letting the plan
+        # imply these tasks were checked and found clean.
+        print(
+            f"\n!! WARNING: could not read Asana comments for {len(guard_errors)} "
+            f"task(s) - the already-processed guard is NOT active for them."
+        )
+        print(f"   {guard_errors[0]}")
+        if "stories:read" in guard_errors[0]:
+            print(
+                "   The token lacks `stories:read`. Re-mint it with that scope "
+                "(or full permissions) to enable the guard."
+            )
+        print("   Re-running may repeat a deactivation that was already performed.")
+
     if args.dry_run:
         return 0
 
     if not args.yes:
-        ans = input("\nproceed? [y/N] ").strip().lower()
+        prompt = "\nproceed? [y/N] "
+        if guard_errors:
+            prompt = "\nproceed WITHOUT the already-processed guard? [y/N] "
+        ans = input(prompt).strip().lower()
         if ans != "y":
             print("aborted")
             return 0
@@ -435,6 +554,12 @@ def main() -> int:
 
     for row in plan:
         gid = row["task"]["gid"]
+        # The plan already decided; anything not "ready" (including
+        # already-processed) must never reach a plugin. Without this gate an
+        # already-processed row still has creds + URL and would be executed.
+        if row["status"] != "ready":
+            outcomes[gid] = row["status"]
+            continue
         if not row["creds"] or row["status"] == "missing-credentials":
             outcomes[gid] = "missing-credentials"
             continue
@@ -483,7 +608,7 @@ def main() -> int:
         gid = row["task"]["gid"]
         results.append({
             **row,
-            "outcome": outcomes.get(gid, "unknown"),
+            "outcome": outcomes.get(gid, row["status"]),
             "shots": shots_by_gid.get(gid, []),
             "comment_error": comment_errors.get(gid),
         })
