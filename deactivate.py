@@ -315,6 +315,37 @@ def _headline_for(service: str, outcome: str) -> str:
     return template.format(product=_product_name(service))
 
 
+def _headline_patterns() -> list["re.Pattern[str]"]:
+    """Every headline this runner can write, as anchored regexes.
+
+    `{product}` in a template becomes `.+`; the per-service generic headlines
+    take a trailing service name. Matching the FIRST line only keeps a human
+    who merely quotes one of these phrases mid-comment from tripping the guard.
+    """
+    heads = list(SERVICE_HEADLINES.values()) + [DEFAULT_HEADLINE]
+    pats = [re.escape(h).replace(r"\{product\}", ".+") for h in heads]
+    pats += [
+        r"Пользователь уже был деактивирован в .+",
+        r"Пользователь не найден в .+",
+    ]
+    return [re.compile(rf"^{p}\.?\s*$") for p in pats]
+
+
+def _is_automation_comment(text: str) -> bool:
+    """True if `text` was written by this runner (any generation).
+
+    Recognises, in order of age: the visible marker some comments still
+    carry, the original English headlines, and the current Russian headlines
+    (first line only). The marker itself is no longer written - the operator
+    asked for comments to contain nothing but the headline - so the headline
+    IS the fingerprint now.
+    """
+    if AUTOMATION_MARKER in text or any(h in text for h in LEGACY_HEADLINES):
+        return True
+    first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    return any(p.match(first) for p in _headline_patterns())
+
+
 def _existing_automation_comment(task_gid: str) -> str | None:
     """Return a short description of a prior automation comment, or None.
 
@@ -330,7 +361,7 @@ def _existing_automation_comment(task_gid: str) -> str | None:
     comments = fetch_task_comments(task_gid)
     for c in comments:
         text = c.get("text") or ""
-        if AUTOMATION_MARKER in text or any(h in text for h in LEGACY_HEADLINES):
+        if _is_automation_comment(text):
             when = (c.get("created_at") or "")[:10]
             first = text.strip().splitlines()[0][:60] if text.strip() else "(empty)"
             return f"{first} ({when})" if when else first
@@ -354,25 +385,15 @@ def _comment_after_outcome(
         for shot in shots:
             upload_task_attachment(gid, shot)
 
-        shot_names = [Path(s).name for s in shots]
-        lines = [
-            _headline_for(row["service"], outcome),
-            f"Service: {row['service']}",
-            f"User: {row['target']}",
-            f"Result: {outcome}",
-        ]
-        if shot_names:
-            lines.append("Screenshot(s) attached:")
-            lines.extend(f"- {name}" for name in shot_names)
-        else:
-            lines.append("Screenshot: not available for this service.")
+        # Screenshots are still ATTACHED above; the comment just no longer
+        # lists them. The headline is the whole message - and it is also what
+        # the re-run guard keys on (see _is_automation_comment), so it must
+        # stay the first line.
+        lines = [_headline_for(row["service"], outcome)]
 
+        # Completion is visible in the task's own status, so it is not
+        # announced in the comment.
         will_complete = complete and outcome in COMPLETABLE_OUTCOMES
-        if will_complete:
-            lines.append("Task marked complete by automation.")
-        # Marker last, so a re-run can recognise this comment even if the
-        # wording above changes.
-        lines.append(AUTOMATION_MARKER)
 
         create_task_comment(gid, "\n".join(lines))
 

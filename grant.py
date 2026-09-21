@@ -343,6 +343,34 @@ def _headline_for(service: str, outcome: str, role: str) -> str:
     return template.format(product=(role or "").strip().title() or service)
 
 
+def _headline_patterns() -> list["re.Pattern[str]"]:
+    """Every headline this runner can write, as anchored regexes.
+
+    `{product}` in a template becomes `.+`; the generic headlines take a
+    trailing service name. Matching the FIRST line only keeps a human who
+    merely quotes one of these phrases mid-comment from tripping the guard.
+    """
+    heads = list(GRANT_HEADLINES.values()) + [DEFAULT_GRANT_HEADLINE]
+    pats = [re.escape(h).replace(r"\{product\}", ".+") for h in heads]
+    pats += [r"Пользователь уже имеет доступ к .+", r"Действий не выполнено"]
+    return [re.compile(rf"^{p}\.?\s*$") for p in pats]
+
+
+def _is_automation_comment(text: str) -> bool:
+    """True if `text` was written by this runner (any generation).
+
+    Recognises, in order of age: the visible marker some comments still
+    carry, the original English headlines, and the current Russian headlines
+    (first line only). The marker itself is no longer written - the operator
+    asked for comments to contain nothing but the headline - so the headline
+    IS the fingerprint now.
+    """
+    if AUTOMATION_MARKER in text or any(h in text for h in LEGACY_HEADLINES):
+        return True
+    first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    return any(p.match(first) for p in _headline_patterns())
+
+
 def _figma_remap(service: str, target: str) -> str | None:
     """The address Figma was actually invited with, if it differs from the task's."""
     if _canonical_key(service) != "FIGMA":
@@ -368,7 +396,7 @@ def _existing_automation_comment(task_gid: str) -> str | None:
     comments = fetch_task_comments(task_gid)
     for c in comments:
         text = c.get("text") or ""
-        if AUTOMATION_MARKER in text or any(h in text for h in LEGACY_HEADLINES):
+        if _is_automation_comment(text):
             when = (c.get("created_at") or "")[:10]
             first = text.strip().splitlines()[0][:60] if text.strip() else "(empty)"
             return f"{first} ({when})" if when else first
@@ -391,33 +419,20 @@ def _comment_after_outcome(
         for shot in shots:
             upload_task_attachment(gid, shot)
 
-        remapped = _figma_remap(row["service"], row["target"])
-        user_line = (
-            f"User: {row['target']} -> {remapped}" if remapped else f"User: {row['target']}"
-        )
-        lines = [
-            _headline_for(row["service"], outcome, row["role"]),
-            f"Service: {row['service']}",
-            user_line,
-            f"Role: {row['role']}",
-            f"Result: {outcome}",
-        ]
-        if remapped and outcome.startswith("invited"):
-            lines += ["", FIGMA_REMAP_NOTE.format(addr=remapped), ""]
-        shot_names = [Path(s).name for s in shots]
-        if shot_names:
-            lines.append("Screenshot(s) attached:")
-            lines.extend(f"- {name}" for name in shot_names)
-        else:
-            # API-only plugins (e.g. Adobe UMAPI) never open a page.
-            lines.append("Screenshot: not available for this service.")
+        # Screenshots are still ATTACHED above; the comment just no longer
+        # lists them. The headline must stay the first line - the re-run
+        # guard fingerprints on it (see _is_automation_comment).
+        lines = [_headline_for(row["service"], outcome, row["role"])]
 
+        # The remap note carries the mirror address itself, so dropping the
+        # "User:" line loses nothing the reader needs.
+        remapped = _figma_remap(row["service"], row["target"])
+        if remapped and outcome.startswith("invited"):
+            lines += ["", FIGMA_REMAP_NOTE.format(addr=remapped)]
+
+        # Completion is visible in the task's own status, so it is not
+        # announced in the comment.
         will_complete = complete and _outcome_matches(outcome, COMPLETABLE_PREFIXES)
-        if will_complete:
-            lines.append("Task marked complete by automation.")
-        # Marker last, so a re-run can recognise this comment even if the
-        # wording above changes.
-        lines.append(AUTOMATION_MARKER)
 
         create_task_comment(gid, "\n".join(lines))
 
