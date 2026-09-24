@@ -11,6 +11,7 @@ Usage:
     ./deactivate.py --date 2026-04-22 --dry-run
     ./deactivate.py --date 2026-04-22 --yes --headless
     ./deactivate.py --date 2026-04-22 --screenshot-dir ./proof
+    ./deactivate.py --task 1217366391048351 --dry-run
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ from asana_client import (
     AsanaError,
     complete_task,
     create_task_comment,
+    fetch_task,
     fetch_task_comments,
     fetch_tasks_due_on,
     upload_task_attachment,
@@ -407,7 +409,8 @@ def _comment_after_outcome(
 def main() -> int:
     make_stdout_safe()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--date", required=True, help="Due date in YYYY-MM-DD")
+    ap.add_argument("--date", help="Due date in YYYY-MM-DD (mutually exclusive with --task)")
+    ap.add_argument("--task", help="Single Asana task GID to process (ignores assignee/due-date filters)")
     ap.add_argument("--dry-run", action="store_true", help="Print plan and exit")
     ap.add_argument("--headless", action="store_true", help="Run browser headless")
     ap.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
@@ -455,9 +458,14 @@ def main() -> int:
     if args.find_only:
         os.environ["DEACTIVATE_FIND_ONLY"] = "1"
 
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
+    if bool(args.date) == bool(args.task):
+        print("error: pass exactly one of --date YYYY-MM-DD or --task <gid>", file=sys.stderr)
+        return 2
+    if args.date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
         print(f"error: --date must be YYYY-MM-DD, got {args.date!r}", file=sys.stderr)
         return 2
+    # Screenshots and messages are keyed by date; a single-task run has none.
+    date_label = args.date or "manual"
 
     try:
         load_secrets()
@@ -466,14 +474,27 @@ def main() -> int:
         return 2
 
     try:
-        tasks = fetch_tasks_due_on(args.date, include_completed=args.include_completed)
+        if args.task:
+            tasks = [fetch_task(args.task)]
+        else:
+            tasks = fetch_tasks_due_on(args.date, include_completed=args.include_completed)
     except AsanaError as e:
         print(f"asana error: {e}", file=sys.stderr)
         return 1
 
-    matching = [t for t in tasks if t["name"].startswith(TITLE_PREFIX)]
+    matching = [t for t in tasks if t["name"].strip().startswith(TITLE_PREFIX)]
+    # --date already filters completed tasks server-side; mirror that for --task
+    # so a closed task is never re-run by accident.
+    if args.task and not args.include_completed:
+        done = [t for t in matching if t.get("completed")]
+        if done:
+            print(f"task {args.task} is already completed (use --include-completed to re-run)")
+            return 0
     if not matching:
-        print(f"no matching tasks for {args.date}")
+        if args.task:
+            print(f"task {args.task} is not a '{TITLE_PREFIX.strip()}' task")
+        else:
+            print(f"no matching tasks for {args.date}")
         return 0
 
     # Normalize punctuation so a filter like "slack workspace redbark2" matches
@@ -523,14 +544,14 @@ def main() -> int:
     if not plan:
         if service_filters:
             print(
-                f"no tasks for {args.date} match service filter "
+                f"no tasks for {date_label} match service filter "
                 f"{args.service!r}"
             )
         else:
-            print(f"no matching tasks for {args.date}")
+            print(f"no matching tasks for {date_label}")
         return 0
 
-    print_plan(plan, args.date)
+    print_plan(plan, args.date or f"task {args.task}")
     if service_filters:
         print(f"  (filtered to services matching: {', '.join(args.service)})")
 
@@ -563,7 +584,7 @@ def main() -> int:
 
     from playwright.sync_api import sync_playwright
 
-    shot_root = Path(args.screenshot_dir) / args.date
+    shot_root = Path(args.screenshot_dir) / date_label
     shot_root.mkdir(parents=True, exist_ok=True)
 
     # Bucket results: unready tasks resolve immediately; ready tasks are grouped

@@ -228,6 +228,60 @@ SEARCH_INPUT_SEL = (
 )
 
 
+def _pick_search_input(page):
+    """First visible SEARCH_INPUT_SEL match that is NOT a site-wide search box.
+
+    Unity's 2026-09 UI added a global cmd-K search in the top bar whose
+    placeholder ("Search...") matches the same selectors as the members
+    filter; `.first` picked it, which opens a full-screen overlay instead of
+    filtering the list. Prefer inputs outside nav/header/dialog chrome and
+    fall back to the old `.first` behaviour when nothing else qualifies.
+    """
+    inputs = page.locator(SEARCH_INPUT_SEL)
+    try:
+        n = min(inputs.count(), 8)
+    except Exception:
+        return None
+    if n == 0:
+        return None
+    for i in range(n):
+        cand = inputs.nth(i)
+        try:
+            if not cand.is_visible():
+                continue
+            in_chrome = cand.evaluate(
+                "el => !!el.closest('nav, header, [role=\"banner\"], "
+                "[role=\"dialog\"], [class*=\"topbar\" i], [class*=\"appbar\" i], "
+                "[class*=\"global\" i]')"
+            )
+            if in_chrome:
+                continue
+            return cand
+        except Exception:
+            continue
+    return inputs.first
+
+
+def _close_search_overlay(page) -> None:
+    """Close a global search overlay if typing accidentally opened one.
+
+    Only presses Escape when a visible dialog contains a search input, so a
+    legitimately filled list filter (no dialog) is never cleared.
+    """
+    import time as _time
+
+    try:
+        dialogs = page.locator('[role="dialog"], [role="combobox"][aria-expanded="true"]')
+        for i in range(min(dialogs.count(), 4)):
+            d = dialogs.nth(i)
+            if d.is_visible() and d.locator(SEARCH_INPUT_SEL).count():
+                page.keyboard.press("Escape")
+                _time.sleep(0.3)
+                return
+    except Exception:
+        pass
+
+
 def find_user_row(
     page,
     target_user: str,
@@ -262,14 +316,17 @@ def find_user_row(
     except Exception:
         return "failed: list-not-rendered"
 
-    search = page.locator(SEARCH_INPUT_SEL).first
-    if search.count():
+    search = _pick_search_input(page)
+    if search is not None and search.count():
         try:
             search.fill("")
             search.fill(target_user)
             _time.sleep(1.5)  # debounce + filter
         except Exception:
             pass
+        # Typing into the wrong box can pop a global search overlay that would
+        # cover the rows (and their kebab menus) — close it before scanning.
+        _close_search_overlay(page)
 
     # Empty-state messages take priority — they're authoritative.
     try:
