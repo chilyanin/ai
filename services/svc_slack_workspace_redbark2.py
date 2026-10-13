@@ -33,6 +33,7 @@ import re
 import time
 
 from services._common import get_page, is_find_only, submit_totp
+from services._selectors import sel, with_text
 
 DEFAULT_TIMEOUT = 20_000
 SLUG = "slack_workspace_redbark2"
@@ -40,12 +41,17 @@ DEFAULT_URL = "https://redbark2.slack.com/admin"
 DEFAULT_LOGIN_URL = "https://redbark2.slack.com/?no_sso=1&redir=%2Fadmin"
 SECRET_ENV = "SLACK_WORKSPACE_REDBARK2_2FA_SECRET"
 
-SEARCH = '[data-qa="workspace-members__table-header-search_input"]'
-ROW = '[data-qa="workspace-members_table_data_table_row"]'
-ACTIONS_BTN = '[data-qa="table_row_actions_button"]'
-DEACTIVATE_ITEM = '[data-qa="ws-members-action_deactivate"]'
-ACTIVATE_ITEM = '[data-qa="ws-members-action_activate"]'
-CONFIRM_BTN = '[data-qa="primary_action"]'
+# Every CSS selector the plugin relies on, overridable via uicheck/overrides.json.
+SEARCH = sel(SLUG, "search", '[data-qa="workspace-members__table-header-search_input"]')
+ROW = sel(SLUG, "row", '[data-qa="workspace-members_table_data_table_row"]')
+ACTIONS_BTN = sel(SLUG, "actions_button", '[data-qa="table_row_actions_button"]')
+DEACTIVATE_ITEM = sel(SLUG, "deactivate_item", '[data-qa="ws-members-action_deactivate"]')
+ACTIVATE_ITEM = sel(SLUG, "activate_item", '[data-qa="ws-members-action_activate"]')
+CONFIRM_BTN = sel(SLUG, "confirm_button", '[data-qa="primary_action"]')
+LOGIN_EMAIL = sel(SLUG, "login_email", '#email, [data-qa="login_email"]')
+LOGIN_PASSWORD = sel(SLUG, "login_password", '#password, [data-qa="login_password"]')
+LOGIN_SUBMIT = sel(SLUG, "login_submit", '#signin_btn, [data-qa="signin_button"]')
+PEOPLE_TAB = sel(SLUG, "people_tab", 'button:has-text("People"), a:has-text("People")')
 
 
 def _dismiss_cookie_banner(page) -> None:
@@ -85,7 +91,7 @@ def _login(page, creds: dict) -> bool:
     if page.locator(SEARCH).count():
         return True
 
-    email = page.locator('#email, [data-qa="login_email"]').first
+    email = page.locator(LOGIN_EMAIL).first
     try:
         email.wait_for(timeout=8_000)
     except Exception:
@@ -94,12 +100,12 @@ def _login(page, creds: dict) -> bool:
 
     try:
         email.fill(login)
-        page.fill('#password, [data-qa="login_password"]', password)
+        page.fill(LOGIN_PASSWORD, password)
     except Exception:
         return False
 
     try:
-        page.locator('#signin_btn, [data-qa="signin_button"]').first.click()
+        page.locator(LOGIN_SUBMIT).first.click()
     except Exception:
         return False
     time.sleep(3)
@@ -141,7 +147,7 @@ def _ensure_members_table(page, url: str) -> bool:
             return True
 
         # The People tab renders the members table; click it if needed.
-        ppl = page.locator('button:has-text("People"), a:has-text("People")').first
+        ppl = page.locator(PEOPLE_TAB).first
         if ppl.count():
             try:
                 ppl.click()
@@ -174,7 +180,7 @@ def _find_row(page, target_user: str):
             time.sleep(1.5)  # live filter debounce
         except Exception:
             pass
-    row = page.locator(f'{ROW}:has-text("{target_user}")').first
+    row = page.locator(with_text(ROW, target_user)).first
     if row.count() == 0:
         return None
     # Safety: the row really must contain the target email.

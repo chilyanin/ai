@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from totp import generate as totp_generate, seconds_remaining
+from services._selectors import with_text
 
 # ---------------------------------------------------------------------------
 # Per-service browser profiles
@@ -217,6 +218,9 @@ NO_RESULTS_PHRASES = (
     "пользователи не найдены",
 )
 
+# Generic list-row containers; plugins may pass their own via `row_sel`.
+DEFAULT_ROW_SEL = '[role="row"], tr, [role="listitem"], li'
+
 SEARCH_INPUT_SEL = (
     'input[type="search"], '
     'input[placeholder*="search" i], '
@@ -228,7 +232,7 @@ SEARCH_INPUT_SEL = (
 )
 
 
-def _pick_search_input(page):
+def _pick_search_input(page, search_sel: str = SEARCH_INPUT_SEL):
     """First visible SEARCH_INPUT_SEL match that is NOT a site-wide search box.
 
     Unity's 2026-09 UI added a global cmd-K search in the top bar whose
@@ -237,7 +241,7 @@ def _pick_search_input(page):
     filtering the list. Prefer inputs outside nav/header/dialog chrome and
     fall back to the old `.first` behaviour when nothing else qualifies.
     """
-    inputs = page.locator(SEARCH_INPUT_SEL)
+    inputs = page.locator(search_sel)
     try:
         n = min(inputs.count(), 8)
     except Exception:
@@ -288,12 +292,16 @@ def find_user_row(
     *,
     settle_timeout: float = 20.0,
     extra_row_selectors: tuple[str, ...] = (),
+    search_sel: str | None = None,
+    row_sel: str | None = None,
 ) -> str:
     """After landing on a user-list page, search for `target_user`.
 
     `extra_row_selectors` adds service-specific CSS selectors for the row
     container (e.g. `("div.user-row",)` for Plastic SCM). They are appended
     to the default set ([role="row"], tr, [role="listitem"], li).
+    `search_sel` / `row_sel` let a plugin pass its own (override-aware)
+    search-input and row-container selectors instead of the generic ones.
 
     Returns:
       "found"           — a list row containing the user is visible (and outlined
@@ -305,18 +313,20 @@ def find_user_row(
     """
     import time as _time
 
+    search_sel = search_sel or SEARCH_INPUT_SEL
+
     # Wait for the list page to actually render.
     try:
         page.wait_for_function(
             "(sel) => document.querySelector(sel) || "
             "/[\\w.+-]+@[\\w-]+\\.[\\w.-]+/.test(document.body.innerText)",
-            arg=SEARCH_INPUT_SEL,
+            arg=search_sel,
             timeout=int(settle_timeout * 1000),
         )
     except Exception:
         return "failed: list-not-rendered"
 
-    search = _pick_search_input(page)
+    search = _pick_search_input(page, search_sel)
     if search is not None and search.count():
         try:
             search.fill("")
@@ -339,15 +349,9 @@ def find_user_row(
     # Restrict matches to actual list-row roles plus any extra service-specific
     # selectors. We deliberately don't match bare <div> — that bites the
     # search-box container.
-    selectors = [
-        f'[role="row"]:has-text("{target_user}")',
-        f'tr:has-text("{target_user}")',
-        f'[role="listitem"]:has-text("{target_user}")',
-        f'li:has-text("{target_user}")',
-    ]
-    for extra in extra_row_selectors:
-        selectors.append(f'{extra}:has-text("{target_user}")')
-    row = page.locator(", ".join(selectors)).first
+    containers = [row_sel] if row_sel else [DEFAULT_ROW_SEL]
+    containers += list(extra_row_selectors)
+    row = page.locator(with_text(", ".join(containers), target_user)).first
     if row.count() == 0:
         return "user-not-found"
 

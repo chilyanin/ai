@@ -23,6 +23,7 @@ from services._common import (
     set_session_attr,
     solve_cloudflare_turnstile,
 )
+from services._selectors import sel, with_text
 
 DEFAULT_TIMEOUT = 20_000
 SETTLE_TIMEOUT = 5_000
@@ -33,15 +34,33 @@ SERVICE_SLUG = "skills_base_programmers"
 # that nav link for the bounce-back fallback in _open_users_area.
 PEOPLE_RE = re.compile(r"^(people|persons?|directory of people|люди|сотрудники)$", re.I)
 
-# Row containers for a person in the People list, used by _locate_person_row.
-PERSON_ROW_SELECTORS = (
-    '[class*="user" i]',
-    '[class*="member" i]',
-    '[class*="person" i]',
-    '[data-testid*="user" i]',
-    '[data-testid*="member" i]',
-    '[data-testid*="person" i]',
+# Selector keys are shared by both Skills Base orgs (same markup, different URL).
+SEL_SLUG = "skills_base"
+
+# Every CSS selector the plugin relies on, overridable via uicheck/overrides.json.
+LOGIN_EMAIL = sel(
+    SEL_SLUG, "login_email",
+    'input[type="email"], input[name*="email" i], '
+    'input[name*="login" i], input[name*="user" i], '
+    'input[autocomplete="username"], input[type="text"]',
 )
+LOGIN_PASSWORD = sel(
+    SEL_SLUG, "login_password",
+    'input[type="password"], input[name*="password" i], input[autocomplete="current-password"]',
+)
+ROW = sel(SEL_SLUG, "row", '[role="row"], tr, [role="listitem"], li')
+# Extra row containers for a person in the People list, appended to ROW.
+PERSON_ROW_SELECTORS = tuple(sel(
+    SEL_SLUG, "row_extra",
+    [
+        '[class*="user" i]',
+        '[class*="member" i]',
+        '[class*="person" i]',
+        '[data-testid*="user" i]',
+        '[data-testid*="member" i]',
+        '[data-testid*="person" i]',
+    ],
+))
 
 
 def _click_button_named(page, *labels: str) -> bool:
@@ -302,23 +321,11 @@ def _login(page, creds: dict) -> bool:
     if not is_on_auth_page(page) and not _is_skills_base_login_landing(page):
         return _handle_mfa_setup(page)
 
-    login_filled = _fill_first_visible(
-        page,
-        (
-            'input[type="email"], input[name*="email" i], '
-            'input[name*="login" i], input[name*="user" i], '
-            'input[autocomplete="username"], input[type="text"]'
-        ),
-        creds["login"],
-    )
+    login_filled = _fill_first_visible(page, LOGIN_EMAIL, creds["login"])
     if not login_filled:
         return False
 
-    password_filled = _fill_first_visible(
-        page,
-        'input[type="password"], input[name*="password" i], input[autocomplete="current-password"]',
-        creds["password"],
-    )
+    password_filled = _fill_first_visible(page, LOGIN_PASSWORD, creds["password"])
     if not password_filled:
         if not _click_button_named(page, "Continue", "Next", "Sign in", "Log in", "Login"):
             page.keyboard.press("Enter")
@@ -326,11 +333,7 @@ def _login(page, creds: dict) -> bool:
             page.locator('input[type="password"]').first.wait_for(timeout=12_000)
         except Exception:
             return False
-        password_filled = _fill_first_visible(
-            page,
-            'input[type="password"], input[name*="password" i], input[autocomplete="current-password"]',
-            creds["password"],
-        )
+        password_filled = _fill_first_visible(page, LOGIN_PASSWORD, creds["password"])
         if not password_filled:
             return False
 
@@ -368,7 +371,8 @@ DELETE_CONFIRM_RE = re.compile(
 )
 # Selectors for the per-row delete (basket/trash) control. Confirmed-shape
 # selectors first, then defensive fallbacks for other markups.
-DELETE_BTN_SEL = (
+DELETE_BTN_SEL = sel(
+    SEL_SLUG, "delete_button",
     'a[href*="/people/delete" i], a[href*="/delete" i], '
     'a[title*="delete" i], button[title*="delete" i], '
     'a:has(i[class*="trash" i]), button:has(i[class*="trash" i]), '
@@ -379,13 +383,14 @@ DELETE_BTN_SEL = (
     'a:has(i[class*="basket" i]), button:has(i[class*="basket" i]), '
     'button:has(i[class*="delete" i]), button:has(i[class*="bin" i]), '
     'button:has(svg[class*="trash" i]), button:has(svg[class*="basket" i]), '
-    'button:has(svg[class*="delete" i])'
+    'button:has(svg[class*="delete" i])',
 )
 # Confirmation surface: a Bootstrap modal (no role=dialog in this legacy app),
 # a modern role=dialog/alertdialog, or a standalone /people/delete confirm page.
-CONFIRM_SURFACE_SEL = (
+CONFIRM_SURFACE_SEL = sel(
+    SEL_SLUG, "confirm_surface",
     '[role="dialog"], [role="alertdialog"], '
-    '.modal.in, .modal.show, .modal[style*="display: block"], .modal:visible'
+    '.modal.in, .modal.show, .modal[style*="display: block"], .modal:visible',
 )
 
 
@@ -395,15 +400,7 @@ def _locate_person_row(page, target_user: str):
     Used by both _find_person (to outline the row) and the delete flow (to act
     on it).
     """
-    selectors = [
-        f'[role="row"]:has-text("{target_user}")',
-        f'tr:has-text("{target_user}")',
-        f'[role="listitem"]:has-text("{target_user}")',
-        f'li:has-text("{target_user}")',
-    ]
-    for extra in PERSON_ROW_SELECTORS:
-        selectors.append(f'{extra}:has-text("{target_user}")')
-    row = page.locator(", ".join(selectors)).first
+    row = page.locator(with_text(", ".join((ROW, *PERSON_ROW_SELECTORS)), target_user)).first
     if row.count() == 0:
         return None
     try:
@@ -507,12 +504,12 @@ def _deactivate_person(page, target_user: str) -> str:
         return "needs-confirmation: deletion-unverified"
 
 
-PEOPLE_SEARCH_SEL = '#peopleSearch, input[placeholder*="people" i]'
+PEOPLE_SEARCH_SEL = sel(SEL_SLUG, "people_search", '#peopleSearch, input[placeholder*="people" i]')
 # DataTables footer line, e.g. "Showing 1 to 1 of 1 entries (filtered from 119
 # total entries)". This is the authoritative signal that the grid has applied
 # the search — far more reliable than scraping transient "No matching records"
 # text that flashes while the AJAX data is still loading.
-DT_INFO_SEL = '.dataTables_info, [id$="_info"]'
+DT_INFO_SEL = sel(SEL_SLUG, "dt_info", '.dataTables_info, [id$="_info"]')
 _DT_FILTERED_RE = re.compile(r"filtered from\s+[\d,]+", re.I)
 _DT_ZERO_RE = re.compile(r"showing\s+0\s+to\s+0|of\s+0\s+entries", re.I)
 

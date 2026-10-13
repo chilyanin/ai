@@ -18,11 +18,50 @@ import re
 import time
 
 from services._common import get_page, is_on_auth_page
+from services._selectors import sel, with_text
 from totp import generate as totp_generate, seconds_remaining
 
 DEFAULT_TIMEOUT = 20_000
 SETTLE_TIMEOUT = 4_000
 SESSION_KEY = "_figma_signed_in"
+SLUG = "figma"
+
+# Every CSS selector the plugin relies on, overridable via uicheck/overrides.json.
+LOGIN_EMAIL = sel(SLUG, "login_email", 'input[name="email"]')
+LOGIN_PASSWORD = sel(SLUG, "login_password", 'input[name="password"]')
+LOGIN_SUBMIT = sel(SLUG, "login_submit", 'button[type="submit"]')
+OTP_INPUT = sel(
+    SLUG, "otp_input",
+    'input[autocomplete="one-time-code"], input[name="code"], input[name="totp"]',
+)
+# Direct URL of Admin -> People; empty = navigate through the sidebar.
+PEOPLE_URL = sel(SLUG, "people_url", "")
+DIALOG = sel(SLUG, "dialog", '[role="dialog"]:visible')
+ROW = sel(SLUG, "row", '[role="row"], tr, [role="listitem"], li')
+KEBAB = sel(
+    SLUG, "kebab",
+    'button[aria-haspopup], button[aria-label*="More" i], button[aria-label*="options" i], '
+    'button[aria-label*="actions" i], button:has-text("…"), button:has-text("...")',
+)
+REMOVE_ITEM = sel(
+    SLUG, "remove_item", '[role="menuitem"]:has-text("Remove"), button:has-text("Remove")'
+)
+INVITE_BUTTON = sel(
+    SLUG, "invite_button", 'button:has-text("Invite"), a[role="button"]:has-text("Invite")'
+)
+INVITE_EMAIL = sel(
+    SLUG, "invite_email",
+    'input[type="email"]:visible, '
+    'input[placeholder*="email" i]:visible, '
+    'input[placeholder*="Email" i]:visible, '
+    'textarea[placeholder*="email" i]:visible, '
+    'input[aria-label*="email" i]:visible',
+)
+SEND_BUTTON = sel(
+    SLUG, "send_button",
+    'button:has-text("Send invite"), button:has-text("Send"), '
+    'button:has-text("Invite")',
+)
 
 
 def _submit_2fa_once(page, code_input, secret: str) -> None:
@@ -51,9 +90,7 @@ def _fill_2fa(page) -> bool:
     secret = os.environ.get("FIGMA_2FA_SECRET")
     if not secret:
         return False
-    code_input = page.locator(
-        'input[autocomplete="one-time-code"], input[name="code"], input[name="totp"]'
-    ).first
+    code_input = page.locator(OTP_INPUT).first
     try:
         code_input.wait_for(timeout=10_000)
     except Exception:
@@ -258,12 +295,12 @@ def _login(page, creds) -> bool:
     # If persistent cookies already authenticated us, the login form won't be
     # rendered — Figma redirects past /login. Treat that as success.
     try:
-        page.locator('input[name="email"]').first.wait_for(timeout=5_000)
+        page.locator(LOGIN_EMAIL).first.wait_for(timeout=5_000)
     except Exception:
         return not is_on_auth_page(page)
-    page.fill('input[name="email"]', creds["login"])
-    page.fill('input[name="password"]', creds["password"])
-    page.locator('button[type="submit"]').first.click()
+    page.fill(LOGIN_EMAIL, creds["login"])
+    page.fill(LOGIN_PASSWORD, creds["password"])
+    page.locator(LOGIN_SUBMIT).first.click()
     _fill_2fa(page)
     try:
         page.wait_for_url(re.compile(r"figma\.com/(files|admin|team|org)"), timeout=25_000)
@@ -346,6 +383,15 @@ def _click_or_goto_admin(page) -> bool:
 
 def _navigate_to_people(page) -> str | None:
     """Navigate Admin → People. Returns None on success, status string on failure."""
+    # A recorded direct URL (uicheck nav-repair) short-circuits the sidebar walk.
+    if PEOPLE_URL:
+        page.goto(PEOPLE_URL)
+        try:
+            page.wait_for_load_state("networkidle", timeout=SETTLE_TIMEOUT)
+        except Exception:
+            pass
+        if _on_people_page(page):
+            return None
     if not _click_or_goto_admin(page):
         return "failed: admin-link-not-found"
     try:
@@ -380,10 +426,11 @@ def _navigate_to_people(page) -> str | None:
     return None
 
 
-SEARCH_SEL = (
+SEARCH_SEL = sel(
+    SLUG, "search",
     'input[type="search"], '
     'input[placeholder*="Search" i], '
-    'input[placeholder*="search" i]'
+    'input[placeholder*="search" i]',
 )
 
 
@@ -467,9 +514,7 @@ def _open_invite_dialog(page) -> str | None:
     _dismiss_in_app_overlay(page)
     invite_btn = page.get_by_role("button", name=re.compile(r"^Invite\b", re.I)).first
     if invite_btn.count() == 0:
-        invite_btn = page.locator(
-            'button:has-text("Invite"), a[role="button"]:has-text("Invite")'
-        ).first
+        invite_btn = page.locator(INVITE_BUTTON).first
     if invite_btn.count() == 0:
         return "failed: invite-button-not-found"
     try:
@@ -482,7 +527,7 @@ def _open_invite_dialog(page) -> str | None:
             return f"failed: invite-click ({type(e).__name__})"
 
     try:
-        page.locator('[role="dialog"]:visible').last.wait_for(timeout=8_000)
+        page.locator(DIALOG).last.wait_for(timeout=8_000)
     except Exception:
         return "failed: invite-dialog-not-shown"
     return None
@@ -491,13 +536,7 @@ def _open_invite_dialog(page) -> str | None:
 def _fill_invite_email(dialog, email: str) -> bool:
     """Type `email` into the dialog's email field. Figma's invite dialog uses
     a tag-style input that accepts comma/Enter to commit a chip."""
-    candidates = dialog.locator(
-        'input[type="email"]:visible, '
-        'input[placeholder*="email" i]:visible, '
-        'input[placeholder*="Email" i]:visible, '
-        'textarea[placeholder*="email" i]:visible, '
-        'input[aria-label*="email" i]:visible'
-    )
+    candidates = dialog.locator(INVITE_EMAIL)
     if candidates.count() == 0:
         # Last resort: any visible text input inside the dialog.
         candidates = dialog.locator(
@@ -631,10 +670,7 @@ def _click_send_invite(dialog) -> str | None:
         "button", name=re.compile(r"^(Send\s+invite|Send|Invite)\b", re.I)
     ).first
     if send.count() == 0:
-        send = dialog.locator(
-            'button:has-text("Send invite"), button:has-text("Send"), '
-            'button:has-text("Invite")'
-        ).last
+        send = dialog.locator(SEND_BUTTON).last
     if send.count() == 0:
         return "failed: send-button-not-found"
     # Wait for the button to be enabled — Figma disables it until the email
@@ -732,7 +768,7 @@ def invite(context, creds: dict, target_user: str, role: str = "full") -> str:
     if open_err:
         return open_err
 
-    dialog = page.locator('[role="dialog"]:visible').last
+    dialog = page.locator(DIALOG).last
 
     if not _fill_invite_email(dialog, target_user):
         return "failed: email-field-not-found"
@@ -840,12 +876,7 @@ def deactivate(context, creds: dict, target_user: str) -> str:
 
     # Restrict the row search to list-row roles only (NOT generic <div>, which
     # would match the search input's container — a bug we've already hit).
-    row = page.locator(
-        f'[role="row"]:has-text("{target_user}"), '
-        f'tr:has-text("{target_user}"), '
-        f'[role="listitem"]:has-text("{target_user}"), '
-        f'li:has-text("{target_user}")'
-    ).first
+    row = page.locator(with_text(ROW, target_user)).first
     if row.count() == 0:
         return "user-not-found"
 
@@ -870,10 +901,7 @@ def deactivate(context, creds: dict, target_user: str) -> str:
     _dismiss_in_app_overlay(page)
 
     # ---- 8. Open the row's 3-dots menu ----
-    kebab = row.locator(
-        'button[aria-haspopup], button[aria-label*="More" i], button[aria-label*="options" i], '
-        'button[aria-label*="actions" i], button:has-text("…"), button:has-text("...")'
-    ).first
+    kebab = row.locator(KEBAB).first
     if kebab.count() == 0:
         # Last-resort: hover the row to reveal a hidden button, then take the last button.
         row.hover()
@@ -884,9 +912,7 @@ def deactivate(context, creds: dict, target_user: str) -> str:
     # ---- 9. Click "Remove" ----
     remove = page.get_by_role("menuitem", name=re.compile(r"^Remove\b", re.I)).first
     if remove.count() == 0:
-        remove = page.locator(
-            '[role="menuitem"]:has-text("Remove"), button:has-text("Remove")'
-        ).first
+        remove = page.locator(REMOVE_ITEM).first
     if remove.count() == 0:
         return "failed: remove-not-found"
     # One more overlay-dismiss attempt before the destructive click — surveys
@@ -909,7 +935,7 @@ def deactivate(context, creds: dict, target_user: str) -> str:
     # Older dialog form (with a checkbox "I understand…") is still handled
     # below as a fallback.
     try:
-        dialog = page.locator('[role="dialog"]:visible').last
+        dialog = page.locator(DIALOG).last
         dialog.wait_for(timeout=5_000)
     except Exception:
         return "needs-confirmation: no-dialog"

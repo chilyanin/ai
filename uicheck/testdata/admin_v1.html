@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Members · Fake Admin v1</title>
+<style>
+  body { font-family: sans-serif; margin: 24px; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { border-bottom: 1px solid #ddd; padding: 8px; text-align: left; }
+  .menu { display: none; position: absolute; background: #fff; border: 1px solid #999; padding: 4px; }
+  .menu.open { display: block; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <nav><a href="#billing">Billing</a> · <a href="#people">People</a></nav>
+  <input data-qa="global-search" placeholder="Search everything" aria-label="Global search">
+</header>
+<main>
+  <h1>Members</h1>
+  <input data-qa="members-search" type="search" placeholder="Filter members" id="members-filter">
+  <button data-qa="invite" type="button">Invite people</button>
+  <table>
+    <thead><tr><th>Name</th><th>Email</th><th></th></tr></thead>
+    <tbody id="rows">
+      <tr data-qa="member-row"><td>Admin Bot</td><td>admin@example.test</td>
+        <td><button data-qa="row-actions" aria-label="More actions" type="button">⋯</button></td></tr>
+      <tr data-qa="member-row"><td>Jane Doe</td><td>jane@example.test</td>
+        <td><button data-qa="row-actions" aria-label="More actions" type="button">⋯</button></td></tr>
+      <tr data-qa="member-row"><td>John Roe</td><td>john@example.test</td>
+        <td><button data-qa="row-actions" aria-label="More actions" type="button">⋯</button></td></tr>
+    </tbody>
+  </table>
+  <div class="menu" id="menu" role="menu">
+    <div role="menuitem" data-qa="action-edit">Edit profile</div>
+    <div role="menuitem" data-qa="action-remove">Remove</div>
+  </div>
+  <div id="dialog" role="dialog" class="hidden">
+    <h2>Invite people</h2>
+    <input data-qa="invite-email" type="email" placeholder="Email address">
+    <button data-qa="send" disabled>Send invite</button>
+    <button data-qa="cancel">Cancel</button>
+  </div>
+</main>
+<script>
+  const filter = document.getElementById('members-filter');
+  filter.addEventListener('input', () => {
+    const q = filter.value.toLowerCase();
+    for (const tr of document.querySelectorAll('#rows tr')) {
+      tr.style.display = tr.innerText.toLowerCase().includes(q) ? '' : 'none';
+    }
+  });
+  for (const b of document.querySelectorAll('[data-qa="row-actions"]')) {
+    b.addEventListener('click', (e) => {
+      const m = document.getElementById('menu');
+      m.classList.add('open');
+      m.style.left = e.pageX + 'px'; m.style.top = e.pageY + 'px';
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { document.getElementById('menu').classList.remove('open'); document.getElementById('dialog').classList.add('hidden'); }
+  });
+  document.querySelector('[data-qa="invite"]').addEventListener('click', () => document.getElementById('dialog').classList.remove('hidden'));
+  document.querySelector('[data-qa="cancel"]').addEventListener('click', () => document.getElementById('dialog').classList.add('hidden'));
+</script>
+</body>
+</html>

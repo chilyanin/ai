@@ -16,6 +16,7 @@ import re
 import time
 
 from services._common import (
+    SEARCH_INPUT_SEL,
     find_user_row,
     get_page,
     is_find_only,
@@ -24,11 +25,46 @@ from services._common import (
     set_session_attr,
     submit_totp,
 )
+from services._selectors import sel, split_top_level, with_text
 
 DEFAULT_TIMEOUT = 25_000
 SETTLE_TIMEOUT = 4_000
 SESSION_KEY = "_unity_signed_in"
 APP_HOSTNAME = "cloud.unity.com"
+SLUG = "unity"
+
+# Every CSS selector the plugin relies on, overridable via uicheck/overrides.json.
+LOGIN_EMAIL = sel(
+    SLUG, "login_email",
+    'input[type="email"], input[name="email"], '
+    'input[name="userEmail"], input[autocomplete="username"], '
+    'input[id*="email" i]',
+)
+LOGIN_PASSWORD = sel(
+    SLUG, "login_password", 'input[type="password"], input#password, input[name="password"]'
+)
+SEARCH = sel(SLUG, "search", SEARCH_INPUT_SEL)
+ROW = sel(SLUG, "row", '[role="row"], tr, [role="listitem"], li')
+# Unity renders members as styled divs as well; appended to ROW.
+ROW_EXTRA = sel(SLUG, "row_extra", 'div[class*="row" i], div[class*="member" i]')
+KEBAB = sel(
+    SLUG, "kebab",
+    'button[aria-haspopup], button[aria-label*="More" i], '
+    'button[aria-label*="options" i], button[aria-label*="actions" i], '
+    'button:has-text("…"), button:has-text("...")',
+)
+REMOVE_ITEM = sel(
+    SLUG, "remove_item",
+    '[role="menuitem"]:has-text("Remove from organization"), '
+    'button:has-text("Remove from organization"), '
+    'a:has-text("Remove from organization")',
+)
+DIALOG = sel(SLUG, "dialog", '[role="dialog"], [role="alertdialog"], [class*="modal" i]')
+CONFIRM_BUTTON = sel(
+    SLUG, "confirm_button",
+    'button:has-text("Remove"), button:has-text("Confirm"), '
+    'button:has-text("Delete"), button:has-text("Yes")',
+)
 
 
 def _on_app(page) -> bool:
@@ -71,11 +107,7 @@ def _login(page, creds: dict) -> bool:
         _dismiss_cookie_banner(page)
         return True
 
-    email_sel = (
-        'input[type="email"], input[name="email"], '
-        'input[name="userEmail"], input[autocomplete="username"], '
-        'input[id*="email" i]'
-    )
+    email_sel = LOGIN_EMAIL
 
     # Wait for whichever comes first: the email field (fresh login), the TFA
     # "Security check" step (a persistent profile that remembers the password
@@ -113,7 +145,7 @@ def _login(page, creds: dict) -> bool:
         else:
             email.press("Enter")
 
-        pw_sel = 'input[type="password"], input#password, input[name="password"]'
+        pw_sel = LOGIN_PASSWORD
         try:
             pw = page.locator(pw_sel).first
             pw.wait_for(timeout=30_000)
@@ -168,15 +200,7 @@ def _wait_for_members_page(page) -> bool:
 
 
 def _find_target_row(page, target_user: str):
-    selectors = (
-        f'[role="row"]:has-text("{target_user}")',
-        f'tr:has-text("{target_user}")',
-        f'[role="listitem"]:has-text("{target_user}")',
-        f'li:has-text("{target_user}")',
-        f'div[class*="row" i]:has-text("{target_user}")',
-        f'div[class*="member" i]:has-text("{target_user}")',
-    )
-    row = page.locator(", ".join(selectors)).first
+    row = page.locator(with_text(f"{ROW}, {ROW_EXTRA}", target_user)).first
     if row.count() == 0:
         return None
     try:
@@ -188,11 +212,7 @@ def _find_target_row(page, target_user: str):
 
 
 def _click_remove_from_org(page, row) -> bool:
-    kebab = row.locator(
-        'button[aria-haspopup], button[aria-label*="More" i], '
-        'button[aria-label*="options" i], button[aria-label*="actions" i], '
-        'button:has-text("…"), button:has-text("...")'
-    ).first
+    kebab = row.locator(KEBAB).first
     if kebab.count() == 0:
         row.hover()
         time.sleep(0.3)
@@ -207,11 +227,7 @@ def _click_remove_from_org(page, row) -> bool:
         "menuitem", name=re.compile(r"remove\s+from\s+organization", re.I)
     ).first
     if remove.count() == 0:
-        remove = page.locator(
-            '[role="menuitem"]:has-text("Remove from organization"), '
-            'button:has-text("Remove from organization"), '
-            'a:has-text("Remove from organization")'
-        ).first
+        remove = page.locator(REMOVE_ITEM).first
     if remove.count() == 0:
         return False
     remove.click()
@@ -251,12 +267,7 @@ def _confirm_remove(page) -> str | None:
     while time.time() < deadline:
         confirm = _find_visible(page.get_by_role("button", name=confirm_name))
         if confirm is None:
-            confirm = _find_visible(
-                page.locator(
-                    'button:has-text("Remove"), button:has-text("Confirm"), '
-                    'button:has-text("Delete"), button:has-text("Yes")'
-                )
-            )
+            confirm = _find_visible(page.locator(CONFIRM_BUTTON))
         if confirm is not None:
             break
         time.sleep(0.25)
@@ -267,9 +278,7 @@ def _confirm_remove(page) -> str | None:
     # Best-effort safety guard: make sure the visible dialog is really the
     # remove-from-organization confirmation before we click. Never block on it.
     try:
-        dialog = _find_visible(
-            page.locator('[role="dialog"], [role="alertdialog"], [class*="modal" i]')
-        )
+        dialog = _find_visible(page.locator(DIALOG))
         if dialog is not None:
             text = dialog.inner_text().lower()
             if "remove" not in text or "organization" not in text:
@@ -313,10 +322,9 @@ def _deactivate(context, creds: dict, target_user: str, *, page_slug: str) -> st
     status = find_user_row(
         page,
         target_user,
-        extra_row_selectors=(
-            'div[class*="row" i]',
-            'div[class*="member" i]',
-        ),
+        extra_row_selectors=tuple(split_top_level(ROW_EXTRA)),
+        search_sel=SEARCH,
+        row_sel=ROW,
     )
     if is_find_only():
         return status

@@ -22,6 +22,7 @@ import re
 import time
 
 from services._common import (
+    SEARCH_INPUT_SEL,
     find_user_row,
     get_page,
     is_find_only,
@@ -29,11 +30,28 @@ from services._common import (
     session_attr,
     set_session_attr,
 )
+from services._selectors import sel, with_text
 
 DEFAULT_TIMEOUT = 25_000
 SETTLE_TIMEOUT = 4_000
 SESSION_KEY = "_maxon_signed_in"
 APP_HOSTNAME = "my.maxon.net"
+SLUG = "maxon"
+
+# Every CSS selector the plugin relies on, overridable via uicheck/overrides.json.
+LOGIN_EMAIL = sel(
+    SLUG, "login_email",
+    'input[type="email"], input[name="email"], input[name="username"], input[autocomplete="username"]',
+)
+LOGIN_PASSWORD = sel(SLUG, "login_password", 'input[type="password"], input[name="password"]')
+USERS_TAB = sel(SLUG, "users_tab", "#dashboard-tabs-tab-users")
+USERS_PANE = sel(SLUG, "users_pane", "#dashboard-tabs-tabpane-users")
+SEARCH = sel(SLUG, "search", SEARCH_INPUT_SEL)
+ROW = sel(SLUG, "row", "tr")
+KEBAB = sel(SLUG, "kebab", ".more-button .dropdown-toggle")
+REMOVE_ITEM = sel(SLUG, "remove_item", '.dropdown-menu.show a:has-text("Remove from team")')
+DIALOG = sel(SLUG, "dialog", '[role="dialog"]')
+CONFIRM_BUTTON = sel(SLUG, "confirm_button", "button.btn-primary")
 
 
 def _on_app(page) -> bool:
@@ -75,9 +93,7 @@ def _login(page, creds: dict) -> bool:
 
     # Email field — Maxon uses Auth0/Okta-style forms; the input may be
     # labelled username, email, or be the first text input on the page.
-    email_input = page.locator(
-        'input[type="email"], input[name="email"], input[name="username"], input[autocomplete="username"]'
-    ).first
+    email_input = page.locator(LOGIN_EMAIL).first
     try:
         email_input.wait_for(timeout=15_000)
     except Exception:
@@ -85,7 +101,7 @@ def _login(page, creds: dict) -> bool:
     email_input.fill(creds["login"])
 
     # Some forms put email and password on the same screen; others stage it.
-    pw_input = page.locator('input[type="password"], input[name="password"]').first
+    pw_input = page.locator(LOGIN_PASSWORD).first
     if pw_input.count() == 0:
         # Click "Sign in" / "Continue" / "Next" / "Log in" to advance.
         if not _click_button_named(page, "Sign in", "Continue", "Next", "Log in"):
@@ -148,27 +164,25 @@ def deactivate(context, creds: dict, target_user: str) -> str:
 
     # Click Users tab by its stable ID (role="tab" — get_by_role("link") may
     # not match reliably across renders).
-    users_tab = page.locator("#dashboard-tabs-tab-users").first
+    users_tab = page.locator(USERS_TAB).first
     if users_tab.count():
         try:
             users_tab.click()
-            page.wait_for_selector(
-                "#dashboard-tabs-tabpane-users", state="visible", timeout=8_000
-            )
+            page.wait_for_selector(USERS_PANE, state="visible", timeout=8_000)
         except Exception:
             pass
 
     # Find the user row. find-only stops here with a screenshot.
-    status = find_user_row(page, target_user)
+    status = find_user_row(page, target_user, search_sel=SEARCH)
     if is_find_only():
         return status
     if status != "found":
         return status
 
     # ---- Destructive flow ----
-    pane = page.locator("#dashboard-tabs-tabpane-users").first
+    pane = page.locator(USERS_PANE).first
     row_scope = pane if pane.count() else page
-    row = row_scope.locator(f'tr:has-text("{target_user}")').first
+    row = row_scope.locator(with_text(ROW, target_user)).first
     if row.count() == 0:
         return "needs-confirmation: row-disappeared-after-find"
     item_id = row.get_attribute("data-item-id")
@@ -181,7 +195,7 @@ def deactivate(context, creds: dict, target_user: str) -> str:
         return "failed: row-text-mismatch"
 
     # 1. Open kebab menu in the row
-    kebab = row.locator(".more-button .dropdown-toggle").first
+    kebab = row.locator(KEBAB).first
     if kebab.count() == 0:
         return "failed: kebab-not-found"
     try:
@@ -191,9 +205,7 @@ def deactivate(context, creds: dict, target_user: str) -> str:
         return f"failed: kebab-click ({type(e).__name__})"
 
     # 2. Click "Remove from team" menu item
-    remove_item = page.locator(
-        '.dropdown-menu.show a:has-text("Remove from team")'
-    ).first
+    remove_item = page.locator(REMOVE_ITEM).first
     try:
         remove_item.wait_for(timeout=5_000)
         remove_item.click()
@@ -202,7 +214,7 @@ def deactivate(context, creds: dict, target_user: str) -> str:
 
     # 3. Wait for confirmation dialog
     try:
-        dialog = page.locator('[role="dialog"]').first
+        dialog = page.locator(DIALOG).first
         dialog.wait_for(timeout=5_000)
     except Exception:
         return "needs-confirmation: no-confirm-dialog"
@@ -219,7 +231,7 @@ def deactivate(context, creds: dict, target_user: str) -> str:
         "button", name=re.compile(r"^(yes,?\s*delete|delete|remove)$", re.I)
     ).first
     if confirm.count() == 0:
-        confirm = dialog.locator("button.btn-primary").last
+        confirm = dialog.locator(CONFIRM_BUTTON).last
     if confirm.count() == 0:
         return "failed: confirm-button-not-found"
     confirm.click()

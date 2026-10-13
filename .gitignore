@@ -84,3 +84,9 @@ htmlcov/
 
 # pyenv
 # .python-version
+
+# uicheck runtime output (reports, fingerprints, LLM benchmark, log).
+# uicheck/overrides.json is deliberately NOT ignored - it is config.
+uicheck/state/
+uicheck/reports/
+uicheck.log

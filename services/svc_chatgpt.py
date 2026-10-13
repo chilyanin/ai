@@ -24,6 +24,7 @@ from services._common import (
     solve_cloudflare_turnstile,
     submit_totp,
 )
+from services._selectors import sel
 
 DEFAULT_TIMEOUT = 20_000
 SETTLE_TIMEOUT = 4_000
@@ -32,6 +33,30 @@ MANUAL_FALLBACK_TIMEOUT = 300_000  # 5 min for human to finish a stuck login
 SESSION_KEY = "_chatgpt_signed_in"
 
 ALLOWED_DOMAIN = "fluytstudio.net"
+SLUG = "chatgpt"
+
+# Every CSS selector the plugin relies on, overridable via uicheck/overrides.json.
+LOGIN_EMAIL = sel(SLUG, "login_email", 'input[name="username"], input[type="email"], input#email')
+LOGIN_PASSWORD = sel(SLUG, "login_password", 'input[type="password"], input#password')
+DIALOG = sel(SLUG, "dialog", '[role="dialog"]:visible')
+INVITE_BUTTON = sel(
+    SLUG, "invite_button",
+    'button:has-text("Invite members"), button:has-text("Invite"), '
+    'button:has-text("Add members"), a:has-text("Invite members")',
+)
+INVITE_EMAIL = sel(
+    SLUG, "invite_email",
+    'input[type="email"]:visible, '
+    'input[placeholder*="email" i]:visible, '
+    'textarea[placeholder*="email" i]:visible, '
+    'input[aria-label*="email" i]:visible, '
+    'textarea[aria-label*="email" i]:visible',
+)
+SEND_BUTTON = sel(
+    SLUG, "send_button",
+    'button:has-text("Send invite"), button:has-text("Send invites"), '
+    'button:has-text("Send"), button:has-text("Invite"), button:has-text("Add")',
+)
 
 
 def _login(page, creds: dict) -> bool:
@@ -48,9 +73,7 @@ def _login(page, creds: dict) -> bool:
 
     # Step 1: email field. OpenAI's auth screen uses input[name="username"].
     try:
-        email_input = page.locator(
-            'input[name="username"], input[type="email"], input#email'
-        ).first
+        email_input = page.locator(LOGIN_EMAIL).first
         email_input.wait_for(timeout=LOGIN_TIMEOUT)
         email_input.fill(login)
     except Exception:
@@ -70,7 +93,7 @@ def _login(page, creds: dict) -> bool:
 
     # Step 2: password field.
     try:
-        pwd_input = page.locator('input[type="password"], input#password').first
+        pwd_input = page.locator(LOGIN_PASSWORD).first
         pwd_input.wait_for(timeout=LOGIN_TIMEOUT)
         pwd_input.fill(password)
     except Exception:
@@ -114,13 +137,14 @@ def _on_admin_members(page) -> bool:
 # Invite button, the page search input, the "Members" heading, or any iframe-
 # free member row. If none of these exist, the page is either still loading or
 # blocked by a Cloudflare / similar challenge.
-ADMIN_SHELL_SEL = (
+ADMIN_SHELL_SEL = sel(
+    SLUG, "admin_shell",
     'button:has-text("Invite members"), button:has-text("Invite"), '
     'button:has-text("Add members"), '
     'input[type="search"], input[placeholder*="Search" i], '
     'h1:has-text("Members"), h2:has-text("Members"), '
     '[role="heading"]:has-text("Members"), '
-    'table tbody tr'
+    'table tbody tr',
 )
 
 
@@ -188,10 +212,7 @@ def _open_invite_dialog(page) -> str | None:
         "button", name=re.compile(r"^(Invite\s+members?|\+\s*Invite|Add\s+members?|Invite)\b", re.I)
     ).first
     if btn.count() == 0:
-        btn = page.locator(
-            'button:has-text("Invite members"), button:has-text("Invite"), '
-            'button:has-text("Add members"), a:has-text("Invite members")'
-        ).first
+        btn = page.locator(INVITE_BUTTON).first
     if btn.count() == 0:
         return "failed: invite-button-not-found"
     try:
@@ -200,7 +221,7 @@ def _open_invite_dialog(page) -> str | None:
         return f"failed: invite-click ({type(e).__name__})"
 
     try:
-        page.locator('[role="dialog"]:visible').last.wait_for(timeout=8_000)
+        page.locator(DIALOG).last.wait_for(timeout=8_000)
     except Exception:
         return "failed: invite-dialog-not-shown"
     return None
@@ -209,13 +230,7 @@ def _open_invite_dialog(page) -> str | None:
 def _fill_invite_email(dialog, email: str) -> bool:
     """Type the email into the dialog. Chatgpt's invite UIs typically use
     a tag-style input — commit the chip with Enter or comma."""
-    candidates = dialog.locator(
-        'input[type="email"]:visible, '
-        'input[placeholder*="email" i]:visible, '
-        'textarea[placeholder*="email" i]:visible, '
-        'input[aria-label*="email" i]:visible, '
-        'textarea[aria-label*="email" i]:visible'
-    )
+    candidates = dialog.locator(INVITE_EMAIL)
     if candidates.count() == 0:
         candidates = dialog.locator(
             'input[type="text"]:visible, input:not([type]):visible, textarea:visible'
@@ -240,10 +255,7 @@ def _click_send_invite(dialog) -> str | None:
     primary_re = re.compile(r"^(Send\s+invites?|Send|Invite|Add)\b", re.I)
     send = dialog.get_by_role("button", name=primary_re).first
     if send.count() == 0:
-        send = dialog.locator(
-            'button:has-text("Send invite"), button:has-text("Send invites"), '
-            'button:has-text("Send"), button:has-text("Invite"), button:has-text("Add")'
-        ).last
+        send = dialog.locator(SEND_BUTTON).last
     if send.count() == 0:
         return "failed: send-button-not-found"
 
@@ -363,7 +375,7 @@ def invite(context, creds: dict, target_user: str, role: str = "full") -> str:
     if open_err:
         return open_err
 
-    dialog = page.locator('[role="dialog"]:visible').last
+    dialog = page.locator(DIALOG).last
 
     if not _fill_invite_email(dialog, target_user):
         return "failed: email-field-not-found"

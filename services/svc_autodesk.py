@@ -30,6 +30,7 @@ from __future__ import annotations
 import re
 
 from services._common import (
+    SEARCH_INPUT_SEL,
     find_user_row,
     get_page,
     is_find_only,
@@ -38,6 +39,7 @@ from services._common import (
     set_session_attr,
     submit_totp,
 )
+from services._selectors import sel
 
 DEFAULT_TIMEOUT = 25_000
 SETTLE_TIMEOUT = 4_000
@@ -45,6 +47,16 @@ SETTLE_TIMEOUT = 4_000
 HUMAN_WAIT_MS = 180_000
 SESSION_KEY = "_autodesk_signed_in"
 ADMIN_HOSTNAME = "manage.autodesk.com"
+SLUG = "autodesk"
+
+# Every CSS selector the plugin relies on, overridable via uicheck/overrides.json.
+LOGIN_EMAIL = sel(
+    SLUG, "login_email",
+    'input#userName, input[name="UserName"], '
+    'input[type="email"], input[name="email"]',
+)
+LOGIN_PASSWORD = sel(SLUG, "login_password", 'input[type="password"], input#password')
+SEARCH = sel(SLUG, "search", SEARCH_INPUT_SEL)
 
 
 def _on_admin_app(page) -> bool:
@@ -93,10 +105,7 @@ def _login(page, creds: dict) -> bool:
     if _on_admin_app(page):
         return True
 
-    email_sel = (
-        'input#userName, input[name="UserName"], '
-        'input[type="email"], input[name="email"]'
-    )
+    email_sel = LOGIN_EMAIL
 
     # Stage 1: email. Wait long here — Autodesk gates the email→password
     # transition behind invisible hCaptcha, which we do not solve
@@ -123,7 +132,7 @@ def _login(page, creds: dict) -> bool:
     # Stage 2: password (also generously waited — Autodesk may interrupt with
     # another challenge between email and password).
     try:
-        pw = page.locator('input[type="password"], input#password').first
+        pw = page.locator(LOGIN_PASSWORD).first
         pw.wait_for(timeout=HUMAN_WAIT_MS)
         pw.fill(creds["password"])
     except Exception:
@@ -218,7 +227,7 @@ def deactivate(context, creds: dict, target_user: str) -> str:
         pass
 
     # Find the user row. find-only stops here with a screenshot.
-    status = find_user_row(page, target_user)
+    status = find_user_row(page, target_user, search_sel=SEARCH)
     if is_find_only():
         return status
     if status != "found":

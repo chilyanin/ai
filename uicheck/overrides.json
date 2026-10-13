@@ -1,0 +1,504 @@
+{
+  "autodesk": {
+    "login_email": {
+      "default": "input#userName, input[name=\"UserName\"], input[type=\"email\"], input[name=\"email\"]",
+      "selector": "input#userName, input[name=\"UserName\"], input[type=\"email\"], input[name=\"email\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_password": {
+      "default": "input[type=\"password\"], input#password",
+      "selector": "input[type=\"password\"], input#password",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "search": {
+      "default": "input[type=\"search\"], input[placeholder*=\"search\" i], input[placeholder*=\"Search\" i], input[placeholder*=\"Поиск\" i], input[placeholder*=\"поиск\" i], input[aria-label*=\"search\" i], input[aria-label*=\"filter\" i]",
+      "selector": "input[type=\"search\"], input[placeholder*=\"search\" i], input[placeholder*=\"Search\" i], input[placeholder*=\"Поиск\" i], input[placeholder*=\"поиск\" i], input[aria-label*=\"search\" i], input[aria-label*=\"filter\" i]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    }
+  },
+  "chatgpt": {
+    "admin_shell": {
+      "default": "button:has-text(\"Invite members\"), button:has-text(\"Invite\"), button:has-text(\"Add members\"), input[type=\"search\"], input[placeholder*=\"Search\" i], h1:has-text(\"Members\"), h2:has-text(\"Members\"), [role=\"heading\"]:has-text(\"Members\"), table tbody tr",
+      "selector": "button:has-text(\"Invite members\"), button:has-text(\"Invite\"), button:has-text(\"Add members\"), input[type=\"search\"], input[placeholder*=\"Search\" i], h1:has-text(\"Members\"), h2:has-text(\"Members\"), [role=\"heading\"]:has-text(\"Members\"), table tbody tr",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "dialog": {
+      "default": "[role=\"dialog\"]:visible",
+      "selector": "[role=\"dialog\"]:visible",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "invite_button": {
+      "default": "button:has-text(\"Invite members\"), button:has-text(\"Invite\"), button:has-text(\"Add members\"), a:has-text(\"Invite members\")",
+      "selector": "button:has-text(\"Invite members\"), button:has-text(\"Invite\"), button:has-text(\"Add members\"), a:has-text(\"Invite members\")",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "invite_email": {
+      "default": "input[type=\"email\"]:visible, input[placeholder*=\"email\" i]:visible, textarea[placeholder*=\"email\" i]:visible, input[aria-label*=\"email\" i]:visible, textarea[aria-label*=\"email\" i]:visible",
+      "selector": "input[type=\"email\"]:visible, input[placeholder*=\"email\" i]:visible, textarea[placeholder*=\"email\" i]:visible, input[aria-label*=\"email\" i]:visible, textarea[aria-label*=\"email\" i]:visible",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_email": {
+      "default": "input[name=\"username\"], input[type=\"email\"], input#email",
+      "selector": "input[name=\"username\"], input[type=\"email\"], input#email",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_password": {
+      "default": "input[type=\"password\"], input#password",
+      "selector": "input[type=\"password\"], input#password",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "send_button": {
+      "default": "button:has-text(\"Send invite\"), button:has-text(\"Send invites\"), button:has-text(\"Send\"), button:has-text(\"Invite\"), button:has-text(\"Add\")",
+      "selector": "button:has-text(\"Send invite\"), button:has-text(\"Send invites\"), button:has-text(\"Send\"), button:has-text(\"Invite\"), button:has-text(\"Add\")",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    }
+  },
+  "figma": {
+    "dialog": {
+      "default": "[role=\"dialog\"]:visible",
+      "selector": "[role=\"dialog\"]:visible",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "invite_button": {
+      "default": "button:has-text(\"Invite\"), a[role=\"button\"]:has-text(\"Invite\")",
+      "selector": "button:has-text(\"Invite\"), a[role=\"button\"]:has-text(\"Invite\")",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "invite_email": {
+      "default": "input[type=\"email\"]:visible, input[placeholder*=\"email\" i]:visible, input[placeholder*=\"Email\" i]:visible, textarea[placeholder*=\"email\" i]:visible, input[aria-label*=\"email\" i]:visible",
+      "selector": "input[type=\"email\"]:visible, input[placeholder*=\"email\" i]:visible, input[placeholder*=\"Email\" i]:visible, textarea[placeholder*=\"email\" i]:visible, input[aria-label*=\"email\" i]:visible",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "kebab": {
+      "default": "button[aria-haspopup], button[aria-label*=\"More\" i], button[aria-label*=\"options\" i], button[aria-label*=\"actions\" i], button:has-text(\"…\"), button:has-text(\"...\")",
+      "selector": "button[aria-haspopup], button[aria-label*=\"More\" i], button[aria-label*=\"options\" i], button[aria-label*=\"actions\" i], button:has-text(\"…\"), button:has-text(\"...\")",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_email": {
+      "default": "input[name=\"email\"]",
+      "selector": "input[name=\"email\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_password": {
+      "default": "input[name=\"password\"]",
+      "selector": "input[name=\"password\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_submit": {
+      "default": "button[type=\"submit\"]",
+      "selector": "button[type=\"submit\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "otp_input": {
+      "default": "input[autocomplete=\"one-time-code\"], input[name=\"code\"], input[name=\"totp\"]",
+      "selector": "input[autocomplete=\"one-time-code\"], input[name=\"code\"], input[name=\"totp\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "people_url": {
+      "default": "",
+      "selector": "",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "remove_item": {
+      "default": "[role=\"menuitem\"]:has-text(\"Remove\"), button:has-text(\"Remove\")",
+      "selector": "[role=\"menuitem\"]:has-text(\"Remove\"), button:has-text(\"Remove\")",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "row": {
+      "default": "[role=\"row\"], tr, [role=\"listitem\"], li",
+      "selector": "[role=\"row\"], tr, [role=\"listitem\"], li",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "search": {
+      "default": "input[type=\"search\"], input[placeholder*=\"Search\" i], input[placeholder*=\"search\" i]",
+      "selector": "input[type=\"search\"], input[placeholder*=\"Search\" i], input[placeholder*=\"search\" i]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "send_button": {
+      "default": "button:has-text(\"Send invite\"), button:has-text(\"Send\"), button:has-text(\"Invite\")",
+      "selector": "button:has-text(\"Send invite\"), button:has-text(\"Send\"), button:has-text(\"Invite\")",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    }
+  },
+  "maxon": {
+    "confirm_button": {
+      "default": "button.btn-primary",
+      "selector": "button.btn-primary",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "dialog": {
+      "default": "[role=\"dialog\"]",
+      "selector": "[role=\"dialog\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "kebab": {
+      "default": ".more-button .dropdown-toggle",
+      "selector": ".more-button .dropdown-toggle",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_email": {
+      "default": "input[type=\"email\"], input[name=\"email\"], input[name=\"username\"], input[autocomplete=\"username\"]",
+      "selector": "input[type=\"email\"], input[name=\"email\"], input[name=\"username\"], input[autocomplete=\"username\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_password": {
+      "default": "input[type=\"password\"], input[name=\"password\"]",
+      "selector": "input[type=\"password\"], input[name=\"password\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "remove_item": {
+      "default": ".dropdown-menu.show a:has-text(\"Remove from team\")",
+      "selector": ".dropdown-menu.show a:has-text(\"Remove from team\")",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "row": {
+      "default": "tr",
+      "selector": "tr",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "search": {
+      "default": "input[type=\"search\"], input[placeholder*=\"search\" i], input[placeholder*=\"Search\" i], input[placeholder*=\"Поиск\" i], input[placeholder*=\"поиск\" i], input[aria-label*=\"search\" i], input[aria-label*=\"filter\" i]",
+      "selector": "input[type=\"search\"], input[placeholder*=\"search\" i], input[placeholder*=\"Search\" i], input[placeholder*=\"Поиск\" i], input[placeholder*=\"поиск\" i], input[aria-label*=\"search\" i], input[aria-label*=\"filter\" i]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "users_pane": {
+      "default": "#dashboard-tabs-tabpane-users",
+      "selector": "#dashboard-tabs-tabpane-users",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "users_tab": {
+      "default": "#dashboard-tabs-tab-users",
+      "selector": "#dashboard-tabs-tab-users",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    }
+  },
+  "plastic_scm": {
+    "delete_button": {
+      "default": "div.user-row button.btn-delete[data-email=\"{target}\" i]",
+      "selector": "div.user-row button.btn-delete[data-email=\"{target}\" i]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_email": {
+      "default": "input[type=\"email\"], input[name=\"email\"], input[name=\"userEmail\"], input[autocomplete=\"username\"], input[id*=\"email\" i]",
+      "selector": "input[type=\"email\"], input[name=\"email\"], input[name=\"userEmail\"], input[autocomplete=\"username\"], input[id*=\"email\" i]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_password": {
+      "default": "input[type=\"password\"], input#password, input[name=\"password\"]",
+      "selector": "input[type=\"password\"], input#password, input[name=\"password\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "row": {
+      "default": "div.user-row",
+      "selector": "div.user-row",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "search": {
+      "default": "input[type=\"search\"], input[placeholder*=\"search\" i], input[placeholder*=\"Search\" i], input[placeholder*=\"Поиск\" i], input[placeholder*=\"поиск\" i], input[aria-label*=\"search\" i], input[aria-label*=\"filter\" i]",
+      "selector": "input[type=\"search\"], input[placeholder*=\"search\" i], input[placeholder*=\"Search\" i], input[placeholder*=\"Поиск\" i], input[placeholder*=\"поиск\" i], input[aria-label*=\"search\" i], input[aria-label*=\"filter\" i]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "sso_button": {
+      "default": [
+        "a:has-text(\"Sign in with Unity\")",
+        "button:has-text(\"Sign in with Unity\")",
+        "a:has-text(\"Unity\")",
+        "button:has-text(\"Unity\")"
+      ],
+      "selector": [
+        "a:has-text(\"Sign in with Unity\")",
+        "button:has-text(\"Sign in with Unity\")",
+        "a:has-text(\"Unity\")",
+        "button:has-text(\"Unity\")"
+      ],
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    }
+  },
+  "skills_base": {
+    "confirm_surface": {
+      "default": "[role=\"dialog\"], [role=\"alertdialog\"], .modal.in, .modal.show, .modal[style*=\"display: block\"], .modal:visible",
+      "selector": "[role=\"dialog\"], [role=\"alertdialog\"], .modal.in, .modal.show, .modal[style*=\"display: block\"], .modal:visible",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "delete_button": {
+      "default": "a[href*=\"/people/delete\" i], a[href*=\"/delete\" i], a[title*=\"delete\" i], button[title*=\"delete\" i], a:has(i[class*=\"trash\" i]), button:has(i[class*=\"trash\" i]), a[aria-label*=\"delete\" i], button[aria-label*=\"delete\" i], button[aria-label*=\"remove\" i], a[aria-label*=\"remove\" i], button[aria-label*=\"trash\" i], button[aria-label*=\"basket\" i], button[title*=\"remove\" i], button[title*=\"basket\" i], a:has(i[class*=\"basket\" i]), button:has(i[class*=\"basket\" i]), button:has(i[class*=\"delete\" i]), button:has(i[class*=\"bin\" i]), button:has(svg[class*=\"trash\" i]), button:has(svg[class*=\"basket\" i]), button:has(svg[class*=\"delete\" i])",
+      "selector": "a[href*=\"/people/delete\" i], a[href*=\"/delete\" i], a[title*=\"delete\" i], button[title*=\"delete\" i], a:has(i[class*=\"trash\" i]), button:has(i[class*=\"trash\" i]), a[aria-label*=\"delete\" i], button[aria-label*=\"delete\" i], button[aria-label*=\"remove\" i], a[aria-label*=\"remove\" i], button[aria-label*=\"trash\" i], button[aria-label*=\"basket\" i], button[title*=\"remove\" i], button[title*=\"basket\" i], a:has(i[class*=\"basket\" i]), button:has(i[class*=\"basket\" i]), button:has(i[class*=\"delete\" i]), button:has(i[class*=\"bin\" i]), button:has(svg[class*=\"trash\" i]), button:has(svg[class*=\"basket\" i]), button:has(svg[class*=\"delete\" i])",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "dt_info": {
+      "default": ".dataTables_info, [id$=\"_info\"]",
+      "selector": ".dataTables_info, [id$=\"_info\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_email": {
+      "default": "input[type=\"email\"], input[name*=\"email\" i], input[name*=\"login\" i], input[name*=\"user\" i], input[autocomplete=\"username\"], input[type=\"text\"]",
+      "selector": "input[type=\"email\"], input[name*=\"email\" i], input[name*=\"login\" i], input[name*=\"user\" i], input[autocomplete=\"username\"], input[type=\"text\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_password": {
+      "default": "input[type=\"password\"], input[name*=\"password\" i], input[autocomplete=\"current-password\"]",
+      "selector": "input[type=\"password\"], input[name*=\"password\" i], input[autocomplete=\"current-password\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "people_search": {
+      "default": "#peopleSearch, input[placeholder*=\"people\" i]",
+      "selector": "#peopleSearch, input[placeholder*=\"people\" i]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "row": {
+      "default": "[role=\"row\"], tr, [role=\"listitem\"], li",
+      "selector": "[role=\"row\"], tr, [role=\"listitem\"], li",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "row_extra": {
+      "default": [
+        "[class*=\"user\" i]",
+        "[class*=\"member\" i]",
+        "[class*=\"person\" i]",
+        "[data-testid*=\"user\" i]",
+        "[data-testid*=\"member\" i]",
+        "[data-testid*=\"person\" i]"
+      ],
+      "selector": [
+        "[class*=\"user\" i]",
+        "[class*=\"member\" i]",
+        "[class*=\"person\" i]",
+        "[data-testid*=\"user\" i]",
+        "[data-testid*=\"member\" i]",
+        "[data-testid*=\"person\" i]"
+      ],
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    }
+  },
+  "slack_workspace_redbark2": {
+    "actions_button": {
+      "default": "[data-qa=\"table_row_actions_button\"]",
+      "selector": "[data-qa=\"table_row_actions_button\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "activate_item": {
+      "default": "[data-qa=\"ws-members-action_activate\"]",
+      "selector": "[data-qa=\"ws-members-action_activate\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "confirm_button": {
+      "default": "[data-qa=\"primary_action\"]",
+      "selector": "[data-qa=\"primary_action\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "deactivate_item": {
+      "default": "[data-qa=\"ws-members-action_deactivate\"]",
+      "selector": "[data-qa=\"ws-members-action_deactivate\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_email": {
+      "default": "#email, [data-qa=\"login_email\"]",
+      "selector": "#email, [data-qa=\"login_email\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_password": {
+      "default": "#password, [data-qa=\"login_password\"]",
+      "selector": "#password, [data-qa=\"login_password\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_submit": {
+      "default": "#signin_btn, [data-qa=\"signin_button\"]",
+      "selector": "#signin_btn, [data-qa=\"signin_button\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "people_tab": {
+      "default": "button:has-text(\"People\"), a:has-text(\"People\")",
+      "selector": "button:has-text(\"People\"), a:has-text(\"People\")",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "row": {
+      "default": "[data-qa=\"workspace-members_table_data_table_row\"]",
+      "selector": "[data-qa=\"workspace-members_table_data_table_row\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "search": {
+      "default": "[data-qa=\"workspace-members__table-header-search_input\"]",
+      "selector": "[data-qa=\"workspace-members__table-header-search_input\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    }
+  },
+  "unity": {
+    "confirm_button": {
+      "default": "button:has-text(\"Remove\"), button:has-text(\"Confirm\"), button:has-text(\"Delete\"), button:has-text(\"Yes\")",
+      "selector": "button:has-text(\"Remove\"), button:has-text(\"Confirm\"), button:has-text(\"Delete\"), button:has-text(\"Yes\")",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "dialog": {
+      "default": "[role=\"dialog\"], [role=\"alertdialog\"], [class*=\"modal\" i]",
+      "selector": "[role=\"dialog\"], [role=\"alertdialog\"], [class*=\"modal\" i]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "kebab": {
+      "default": "button[aria-haspopup], button[aria-label*=\"More\" i], button[aria-label*=\"options\" i], button[aria-label*=\"actions\" i], button:has-text(\"…\"), button:has-text(\"...\")",
+      "selector": "button[aria-haspopup], button[aria-label*=\"More\" i], button[aria-label*=\"options\" i], button[aria-label*=\"actions\" i], button:has-text(\"…\"), button:has-text(\"...\")",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_email": {
+      "default": "input[type=\"email\"], input[name=\"email\"], input[name=\"userEmail\"], input[autocomplete=\"username\"], input[id*=\"email\" i]",
+      "selector": "input[type=\"email\"], input[name=\"email\"], input[name=\"userEmail\"], input[autocomplete=\"username\"], input[id*=\"email\" i]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "login_password": {
+      "default": "input[type=\"password\"], input#password, input[name=\"password\"]",
+      "selector": "input[type=\"password\"], input#password, input[name=\"password\"]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "remove_item": {
+      "default": "[role=\"menuitem\"]:has-text(\"Remove from organization\"), button:has-text(\"Remove from organization\"), a:has-text(\"Remove from organization\")",
+      "selector": "[role=\"menuitem\"]:has-text(\"Remove from organization\"), button:has-text(\"Remove from organization\"), a:has-text(\"Remove from organization\")",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "row": {
+      "default": "[role=\"row\"], tr, [role=\"listitem\"], li",
+      "selector": "[role=\"row\"], tr, [role=\"listitem\"], li",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "row_extra": {
+      "default": "div[class*=\"row\" i], div[class*=\"member\" i]",
+      "selector": "div[class*=\"row\" i], div[class*=\"member\" i]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    },
+    "search": {
+      "default": "input[type=\"search\"], input[placeholder*=\"search\" i], input[placeholder*=\"Search\" i], input[placeholder*=\"Поиск\" i], input[placeholder*=\"поиск\" i], input[aria-label*=\"search\" i], input[aria-label*=\"filter\" i]",
+      "selector": "input[type=\"search\"], input[placeholder*=\"search\" i], input[placeholder*=\"Search\" i], input[placeholder*=\"Поиск\" i], input[placeholder*=\"поиск\" i], input[aria-label*=\"search\" i], input[aria-label*=\"filter\" i]",
+      "since": "2026-10-13",
+      "source": "code",
+      "verified": "2026-10-13"
+    }
+  }
+}

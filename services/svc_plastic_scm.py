@@ -31,6 +31,7 @@ from __future__ import annotations
 import re
 
 from services._common import (
+    SEARCH_INPUT_SEL,
     find_user_row,
     get_page,
     is_find_only,
@@ -39,11 +40,40 @@ from services._common import (
     set_session_attr,
     submit_totp,
 )
+from services._selectors import fill_target, sel, with_text
 
 DEFAULT_TIMEOUT = 25_000
 SETTLE_TIMEOUT = 4_000
 SESSION_KEY = "_plastic_scm_signed_in"
 APP_HOSTNAME = "plasticscm.com"
+SLUG = "plastic_scm"
+
+# Every CSS selector the plugin relies on, overridable via uicheck/overrides.json.
+SSO_BUTTON = sel(
+    SLUG, "sso_button",
+    [
+        'a:has-text("Sign in with Unity")',
+        'button:has-text("Sign in with Unity")',
+        'a:has-text("Unity")',
+        'button:has-text("Unity")',
+    ],
+)
+LOGIN_EMAIL = sel(
+    SLUG, "login_email",
+    'input[type="email"], input[name="email"], '
+    'input[name="userEmail"], input[autocomplete="username"], '
+    'input[id*="email" i]',
+)
+LOGIN_PASSWORD = sel(
+    SLUG, "login_password", 'input[type="password"], input#password, input[name="password"]'
+)
+SEARCH = sel(SLUG, "search", SEARCH_INPUT_SEL)
+# Plastic SCM renders user rows as <div class="row user-row ...">.
+ROW = sel(SLUG, "row", "div.user-row")
+# Per-row red trash button; `{target}` is the user email (case-insensitive).
+DELETE_BUTTON = sel(
+    SLUG, "delete_button", 'div.user-row button.btn-delete[data-email="{target}" i]'
+)
 
 
 def _on_app(page) -> bool:
@@ -52,14 +82,8 @@ def _on_app(page) -> bool:
 
 def _click_sign_in_with_unity(page) -> bool:
     """Click the "Sign in with Unity" button on Plastic SCM's login page."""
-    selectors = [
-        'a:has-text("Sign in with Unity")',
-        'button:has-text("Sign in with Unity")',
-        'a:has-text("Unity")',
-        'button:has-text("Unity")',
-    ]
-    for sel in selectors:
-        loc = page.locator(sel).first
+    for css in SSO_BUTTON:
+        loc = page.locator(css).first
         if loc.count():
             try:
                 loc.click()
@@ -93,13 +117,8 @@ def _login(page, creds: dict) -> bool:
 
     # ---- Unity ID login ----
     # Stage 1: email
-    email_sel = (
-        'input[type="email"], input[name="email"], '
-        'input[name="userEmail"], input[autocomplete="username"], '
-        'input[id*="email" i]'
-    )
     try:
-        email = page.locator(email_sel).first
+        email = page.locator(LOGIN_EMAIL).first
         email.wait_for(timeout=20_000)
         email.fill(creds["login"])
     except Exception:
@@ -114,9 +133,8 @@ def _login(page, creds: dict) -> bool:
         email.press("Enter")
 
     # Stage 2: password (Unity may use a separate page)
-    pw_sel = 'input[type="password"], input#password, input[name="password"]'
     try:
-        pw = page.locator(pw_sel).first
+        pw = page.locator(LOGIN_PASSWORD).first
         pw.wait_for(timeout=20_000)
         pw.fill(creds["password"])
     except Exception:
@@ -183,7 +201,7 @@ def deactivate(context, creds: dict, target_user: str) -> str:
     # Plastic SCM renders user rows as <div class="row user-row …">, which
     # our default row roles don't cover.
     status = find_user_row(
-        page, target_user, extra_row_selectors=("div.user-row",)
+        page, target_user, extra_row_selectors=(ROW,), search_sel=SEARCH
     )
     if is_find_only():
         return status
@@ -208,9 +226,7 @@ def _remove_user(page, target_user: str) -> str:
     """
     # data-email holds the exact registered address; match case-insensitively
     # in case the Asana title differs in case from what Plastic stored.
-    btn = page.locator(
-        f'div.user-row button.btn-delete[data-email="{target_user}" i]'
-    ).first
+    btn = page.locator(fill_target(DELETE_BUTTON, target_user)).first
     if btn.count() == 0:
         return "failed: delete-button-not-found"
 
@@ -232,7 +248,7 @@ def _remove_user(page, target_user: str) -> str:
         return f"failed: delete-click ({type(e).__name__})"
 
     # Success = the row is removed from the DOM by the AJAX success callback.
-    row = page.locator(f'div.user-row:has-text("{target_user}")').first
+    row = page.locator(with_text(ROW, target_user)).first
     try:
         row.wait_for(state="detached", timeout=10_000)
         return "deactivated"
@@ -241,7 +257,7 @@ def _remove_user(page, target_user: str) -> str:
 
     # Still present — surface the inline error if the API rejected the delete.
     try:
-        err = page.locator("div.user-row .alert-danger:not(.d-none)").first
+        err = page.locator(f"{ROW} .alert-danger:not(.d-none)").first
         if err.count():
             detail = (err.inner_text() or "").strip()[:120]
             return f"failed: delete-rejected ({detail})" if detail else "failed: delete-rejected"

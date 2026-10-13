@@ -82,12 +82,15 @@ description: Оффбординг через Asana-задачи «Удалить
 | Autodesk | [references/autodesk.md](references/autodesk.md) | браузер, **удаление не реализовано** |
 | Maxon | [references/maxon.md](references/maxon.md) | браузер, **удаление не реализовано** |
 | любой другой | [references/new-service.md](references/new-service.md) | generic: открывает URL и ждёт человека |
+| ночная проверка UI / overrides селекторов | [references/uicheck.md](references/uicheck.md) | `uicheck.py`, browser-use, `uicheck/overrides.json` |
 
 ## Окружение
 
 Боевые прогоны идут на **Windows-хосте** (Vault, `.venv\Scripts\python.exe`, планировщик `AsanaDeactivateFindOnly` каждый день в 20:00 в `--find-only --headless`, лог `deactivate-find.log`; дашборд `monitor.py` на порту 5111 с кнопками Offboarding/Onboarding). На этом Mac `VAULT_ADDR` в `.env` пустой, поэтому любой запуск падает с `secrets error: VAULT_ADDR is not set`. Не переключай `SECRETS_BACKEND` на env и не трогай `.env.backup-pre-vault` ради запуска: на Mac допустимы только проверки синтаксиса, `--help` и правки кода.
 
 Профили браузера между ОС не переносятся, на новой машине сессии праймятся заново через `prime_session.py`.
+
+Селекторы плагинов живут в `uicheck/overrides.json` (читаются через `services/_selectors.py: sel()`); каждую ночь в 03:00 задача `AsanaUICheck` (`uicheck.py --yes --headless`) проверяет их на живых сервисах и чинит дрифт. Если плагин упал с `failed: …`, сначала открой `uicheck/reports/latest.md`: там видно, какой шаг сломался и был ли записан override. Подробности в [references/uicheck.md](references/uicheck.md).
 
 ## Секреты
 
@@ -111,3 +114,4 @@ python3 prime_session.py <slug> --url <admin-url>
 - Autodesk и Maxon останавливаются после логина: не обещай пользователю, что они кого-то удалят.
 - Многие задачи «Удалить из Syncsketch» висят на пуле Routing ISS, а не на пользователе. Раннер их не видит, пока их не переназначат. Для одиночной задачи используй `--task <gid>`.
 - Не редактируй плагины «на лету» ради одного запуска. Если нужен фикс, скажи об этом и внеси его как обычное изменение кода.
+- Новый CSS-селектор в плагине объявляй через `sel(slug, key, default)`, затем `python3 uicheck.py --init-overrides`, чтобы ключ попал в `overrides.json` и в ночную проверку. Добавь шаг в `uicheck/probes.py`.

@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Members · Fake Admin v2 (redesign)</title>
+<style>
+  body { font-family: sans-serif; margin: 24px; }
+  .grid { width: 100%; }
+  .member-row { display: flex; gap: 16px; border-bottom: 1px solid #ddd; padding: 8px; }
+  .member-row > div { flex: 1; }
+  .menu { display: none; position: absolute; background: #fff; border: 1px solid #999; padding: 4px; }
+  .menu.open { display: block; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <nav><a href="#billing">Billing</a> · <a href="#people">People</a></nav>
+  <input data-test="global-search" placeholder="Search everything" aria-label="Global search">
+</header>
+<main>
+  <h1>Members</h1>
+  <div class="toolbar">
+    <input data-test="people-filter" type="text" placeholder="Search members" aria-label="Search members" id="people-filter">
+    <button data-test="add-people" type="button">Invite people</button>
+  </div>
+  <div class="grid" role="list" id="rows">
+    <div class="member-row" role="listitem" data-test="person"><div>Admin Bot</div><div>admin@example.test</div>
+      <div><button data-test="person-menu" aria-label="More actions" type="button">⋯</button></div></div>
+    <div class="member-row" role="listitem" data-test="person"><div>Jane Doe</div><div>jane@example.test</div>
+      <div><button data-test="person-menu" aria-label="More actions" type="button">⋯</button></div></div>
+    <div class="member-row" role="listitem" data-test="person"><div>John Roe</div><div>john@example.test</div>
+      <div><button data-test="person-menu" aria-label="More actions" type="button">⋯</button></div></div>
+  </div>
+  <div class="menu" id="menu" role="menu">
+    <div role="menuitem" data-test="menu-edit">Edit profile</div>
+    <div role="menuitem" data-test="menu-remove">Remove</div>
+  </div>
+  <div id="dialog" role="dialog" class="hidden">
+    <h2>Invite people</h2>
+    <input data-test="invite-email" type="email" placeholder="Email address">
+    <button data-test="send" disabled>Send invite</button>
+    <button data-test="cancel">Cancel</button>
+  </div>
+</main>
+<script>
+  const filter = document.getElementById('people-filter');
+  filter.addEventListener('input', () => {
+    const q = filter.value.toLowerCase();
+    for (const r of document.querySelectorAll('#rows .member-row')) {
+      r.style.display = r.innerText.toLowerCase().includes(q) ? '' : 'none';
+    }
+  });
+  for (const b of document.querySelectorAll('[data-test="person-menu"]')) {
+    b.addEventListener('click', (e) => {
+      const m = document.getElementById('menu');
+      m.classList.add('open');
+      m.style.left = e.pageX + 'px'; m.style.top = e.pageY + 'px';
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { document.getElementById('menu').classList.remove('open'); document.getElementById('dialog').classList.add('hidden'); }
+  });
+  document.querySelector('[data-test="add-people"]').addEventListener('click', () => document.getElementById('dialog').classList.remove('hidden'));
+  document.querySelector('[data-test="cancel"]').addEventListener('click', () => document.getElementById('dialog').classList.add('hidden'));
+</script>
+</body>
+</html>
