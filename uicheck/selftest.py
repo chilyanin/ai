@@ -57,15 +57,16 @@ def probe(ctx: ProbeContext, url: str) -> None:
     ctx.state("loaded", "Members" in page.title(), "members page loaded")
     search = ctx.check("search", "the search/filter input above the members list", hints=("search", "filter", "members"))
     search.fill("")
-    search.fill(CANARY)
+    search.fill(ctx.canary)
     time.sleep(0.3)
-    row = ctx.check("row", "a members-list row container (one element per person) that contains the member's email", must_contain=CANARY, hints=("row", "member"))
-    kebab = ctx.check("kebab", "the row's more-actions (⋯) menu button", scope=row, hints=("more", "actions"))
-    kebab.click()
-    time.sleep(0.3)
-    ctx.check("remove_item", "the 'Remove' item in the opened row actions menu (presence only)", hints=("remove",),
-              alt=lambda: page.get_by_role("menuitem", name=re.compile(r"^Remove$", re.I)))
-    ctx.escape(1)
+    if ctx.require_member("row", "kebab", "remove_item"):
+        row = ctx.check("row", "a members-list row container (one element per person) that contains the member's email", must_contain=ctx.canary, hints=("row", "member"))
+        kebab = ctx.check("kebab", "the row's more-actions (⋯) menu button", scope=row, hints=("more", "actions"))
+        kebab.click()
+        time.sleep(0.3)
+        ctx.check("remove_item", "the 'Remove' item in the opened row actions menu (presence only)", hints=("remove",),
+                  alt=lambda: page.get_by_role("menuitem", name=re.compile(r"^Remove$", re.I)))
+        ctx.escape(1)
     search.fill("")
     invite = ctx.check("invite_button", "the button that opens the invite dialog", hints=("invite",))
     invite.click()
@@ -75,14 +76,15 @@ def probe(ctx: ProbeContext, url: str) -> None:
     ctx.escape(1)
 
 
-def run_round(label: str, page, url: str, repairer, store: Store) -> list:
+def run_round(label: str, page, url: str, repairer, store: Store, *, canary: str = CANARY, kind: str = "deactivate") -> list:
     print(f"\n--- {label}: {Path(url).name if url.startswith('file:') else url}")
-    ctx = ProbeContext(slug=SLUG, service="Selftest", page=page, context=page.context, creds={}, canary=CANARY,
+    ctx = ProbeContext(slug=SLUG, service="Selftest", page=page, context=page.context, creds={}, canary=canary,
+                       canary_kind=kind, date="2026-10-14",
                        repairer=repairer, fp_store=store, shot_dir=_TMP / "shots")
     try:
         probe(ctx, url)
     except ProbeAbort as e:
-        print(f"    -- aborted: {e}")
+        print(f"    -- {'soft skip' if e.soft else 'aborted'}: {e}")
     return ctx.results
 
 
@@ -150,6 +152,27 @@ def main() -> int:
             print(f"    fingerprint diffs on round 4: {len(diffs)} (expected 0 - same page as round 3)")
             if diffs:
                 failures.append("round 4: unexpected fingerprint diff")
+
+            # An invitee ("Доступ к" task) is not in the list yet: member steps
+            # must be skipped, the invite path still checked.
+            r5 = run_round("round 5 (v1, invitee canary -> member steps skipped)", page, v1, repairer, store,
+                           canary="newbie@example.test", kind="grant")
+            got5 = {r.step: r.status for r in r5}
+            for step in ("row", "kebab", "remove_item"):
+                if got5.get(step) != "skipped":
+                    failures.append(f"round 5: {step} expected skipped, got {got5.get(step)}")
+            for step in ("search", "invite_button", "dialog", "invite_email", "send_button"):
+                if got5.get(step) != "ok":
+                    failures.append(f"round 5: {step} expected ok, got {got5.get(step)}")
+
+            # A member whose row is absent (already removed): soft skip, not a failure.
+            r6 = run_round("round 6 (v1, member canary not listed -> soft skip)", page, v1, repairer, store,
+                           canary="gone@example.test", kind="deactivate")
+            got6 = {r.step: r.status for r in r6}
+            if got6.get("row") != "skipped":
+                failures.append(f"round 6: row expected skipped, got {got6.get('row')}")
+            if any(s in ("failed", "error", "repaired") for s in got6.values()):
+                failures.append(f"round 6: unexpected statuses {got6}")
         finally:
             browser.close()
 

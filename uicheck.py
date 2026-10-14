@@ -2,9 +2,15 @@
 """Nightly UI-drift check for the browser-driven service plugins.
 
 Walks every browser-based service the way deactivate.py / grant.py would -
-sign in, reach the member list, find a canary user (the admin itself), open
-the row menu, confirm the Remove/Deactivate item is listed - and verifies each
-CSS selector the plugin relies on. When a service has changed its UI, the
+sign in, reach the member list, find the canary user, open the row menu,
+confirm the Remove/Deactivate item is listed - and verifies each CSS selector
+the plugin relies on.
+
+The canary is the person named in that service's Asana task due on --date
+(default: today): a "Удалить из <Service> - <email>" task gives a member and
+enables the full row/menu path; a "Доступ к <Service> - <ФИ>" task gives
+someone not in the service yet, so only login / list / search / invite steps
+run. A service with no task that day is not probed at all. When a service has changed its UI, the
 failing selector is repaired on the spot: candidates are read off the live
 page, a replacement is chosen (browser-use LLM, or a text heuristic), verified
 with Playwright and written to uicheck/overrides.json, which the plugins read
@@ -13,8 +19,10 @@ opened.
 
 Usage:
     ./uicheck.py --init-overrides          # write overrides.json from code defaults
-    ./uicheck.py --dry-run                 # which services would run, with which creds
+    ./uicheck.py --dry-run                 # today's tasks -> which services run, with which canary
+    ./uicheck.py --date 2026-10-20 --dry-run
     ./uicheck.py --service figma           # one service, headed
+    ./uicheck.py --service figma --canary someone@playrix.com   # manual canary, ignores Asana
     ./uicheck.py --yes --headless          # the nightly run (uicheck-run.bat)
     ./uicheck.py --bench-llm               # time OpenAI vs Google, store the winner
     ./uicheck.py --bench-llm --env-file .env_test   # same, with keys from a dotenv
@@ -50,17 +58,55 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _canary_for(service: str, creds: dict, override: str | None) -> str:
-    from deactivate import _env_key_candidates, _first_env
+def canaries_for_date(day: str) -> dict[str, list[dict]]:
+    """Asana tasks due on `day` -> canonical service key -> [{kind, email, gid, service}].
 
-    if override:
-        return override
-    keys = _env_key_candidates(service)
-    env = _first_env(*(n for key in keys for n in (f"SERVICE_{key}_CANARY", f"{key}_CANARY")))
-    return env or creds.get("login") or ""
+    "Удалить из" tasks come first in each list so a member (full probe)
+    beats an invitee (invite-only probe) when both exist for one service.
+    """
+    import deactivate as D
+    import grant as G
+    from asana_client import fetch_tasks_due_on
+
+    out: dict[str, list[dict]] = {}
+    for t in fetch_tasks_due_on(day, text_filter=D.TITLE_PREFIX.strip()):
+        if not t["name"].strip().startswith(D.TITLE_PREFIX):
+            continue
+        service, target = D.parse_task(t)
+        if "@" not in target:
+            continue
+        out.setdefault(D._canonical_key(service), []).append(
+            {"kind": "deactivate", "email": target, "gid": t["gid"], "service": service}
+        )
+    for t in fetch_tasks_due_on(day, text_filter=G.TITLE_PREFIX.strip()):
+        if not t["name"].strip().startswith(G.TITLE_PREFIX):
+            continue
+        parsed = G.parse_task(t)
+        if not parsed["service"] or "@" not in (parsed["target"] or ""):
+            continue
+        out.setdefault(D._canonical_key(parsed["service"]), []).append(
+            {"kind": "grant", "email": parsed["target"], "gid": t["gid"], "service": parsed["service"]}
+        )
+    return out
 
 
-def build_plan(args) -> list[dict]:
+def _pick_canary(spec_name: str, canaries: dict[str, list[dict]]) -> dict | None:
+    """Task for `spec_name`: same canonical key, or a longer alias of it
+    ("ChatGPT Team" -> CHATGPT_TEAM matches the CHATGPT probe)."""
+    from deactivate import _canonical_key
+
+    mine = _canonical_key(spec_name)
+    hits: list[dict] = []
+    for key, rows in canaries.items():
+        if key == mine or key.startswith(mine + "_"):
+            hits += rows
+    if not hits:
+        return None
+    hits.sort(key=lambda r: 0 if r["kind"] == "deactivate" else 1)
+    return hits[0]
+
+
+def build_plan(args, canaries: dict[str, list[dict]] | None) -> list[dict]:
     from deactivate import _has_api_creds, _missing_creds_fields, load_creds
     from uicheck.probes import SERVICES
 
@@ -87,20 +133,30 @@ def build_plan(args) -> list[dict]:
         else:
             status = "ready"
             note = ""
-        canary = _canary_for(name, creds or {}, args.canary) if creds else ""
+        canary, kind, gid = "", "", ""
+        if args.canary:
+            canary, kind, gid = args.canary, "deactivate", "manual"
+        elif canaries is not None:
+            hit = _pick_canary(name, canaries)
+            if hit:
+                canary, kind, gid = hit["email"], hit["kind"], hit["gid"]
         if status == "ready" and not canary:
-            status = "missing-canary"
-            note = "no LOGIN and no <KEY>_CANARY to search for"
-        plan.append({**spec, "creds": creds, "status": status, "note": note, "canary": canary})
+            status = "no-tasks"
+            note = f"no 'Удалить из' / 'Доступ к' task due {args.date}"
+        plan.append({**spec, "creds": creds, "status": status, "note": note,
+                     "canary": canary, "canary_kind": kind, "task_gid": gid})
     return plan
 
 
 def print_plan(plan: list[dict]) -> None:
     print(f"\n=== uicheck plan - {len(plan)} service(s) ===")
     for row in plan:
-        tag = {"ready": "[OK]  ", "missing-credentials": "[SKIP]", "missing-url": "[SKIP]", "api-only": "[SKIP]", "missing-canary": "[SKIP]"}.get(row["status"], "[?]   ")
+        tag = "[OK]  " if row["status"] == "ready" else "[SKIP]"
         extra = f"  ({row['note']})" if row["note"] else ""
-        canary = f"  canary={row['canary']}" if row["status"] == "ready" else ""
+        canary = ""
+        if row["status"] == "ready":
+            path = "remove+invite path" if row["canary_kind"] == "deactivate" else "invite/list path only"
+            canary = f"  canary={row['canary']} [{row['canary_kind']} task {row['task_gid']}: {path}]"
         print(f"  {tag} {row['name']:<28} profile={row['slug']}{canary}{extra}")
 
 
@@ -144,6 +200,8 @@ def run_service(row: dict, *, headless: bool, repairer, fp_store, shot_dir: Path
             context=context,
             creds=row["creds"],
             canary=row["canary"],
+            canary_kind=row.get("canary_kind") or "deactivate",
+            date=row.get("date", ""),
             sel_slug=row.get("sel_slug"),
             repairer=repairer,
             fp_store=fp_store,
@@ -155,7 +213,7 @@ def run_service(row: dict, *, headless: bool, repairer, fp_store, shot_dir: Path
         try:
             row["probe"](ctx)
         except ProbeAbort as e:
-            log(f"    -- aborted: {e}")
+            log(f"    -- {'remaining member steps skipped' if e.soft else 'aborted'}: {e}")
         except Exception as e:  # noqa: BLE001
             shot = ctx._shot("error")
             ctx.results.append(StepResult(name, "probe", "error", f"{type(e).__name__}: {e}", screenshot=shot))
@@ -178,7 +236,8 @@ def write_report(all_results: list, plan: list[dict], *, started: datetime, repo
         "started": started.isoformat(timespec="seconds"),
         "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "llm": llm,
-        "plan": [{k: v for k, v in r.items() if k in ("name", "slug", "status", "note", "canary")} for r in plan],
+        "date": plan[0].get("date") if plan else None,
+        "plan": [{k: v for k, v in r.items() if k in ("name", "slug", "status", "note", "canary", "canary_kind", "task_gid")} for r in plan],
         "results": [r.as_dict() for r in all_results],
     }
     json_path = report_dir / f"{stamp}.json"
@@ -202,6 +261,14 @@ def write_report(all_results: list, plan: list[dict], *, started: datetime, repo
     not_run = [p for p in plan if p["status"] != "ready"]
     if not_run:
         lines.append("Not run: " + ", ".join(f"{p['name']} ({p['status']}{': ' + p['note'] if p['note'] else ''})" for p in not_run))
+        lines.append("")
+    ran = [p for p in plan if p["status"] == "ready"]
+    if ran:
+        lines.append("| service | canary | from task | path |")
+        lines.append("|---|---|---|---|")
+        for p in ran:
+            path = "remove + invite" if p["canary_kind"] == "deactivate" else "list + invite only"
+            lines.append(f"| {p['name']} | {p['canary']} | {p['canary_kind']} {p['task_gid']} | {path} |")
         lines.append("")
     for service, rows in by_service.items():
         worst = min(rows, key=lambda r: ("error", "failed", "repaired", "warn", "ok", "skipped").index(r.status) if r.status in ("error", "failed", "repaired", "warn", "ok", "skipped") else 9)
@@ -249,7 +316,8 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="Print the plan and exit")
     ap.add_argument("--list", action="store_true", help="List services and registered selector keys, then exit")
     ap.add_argument("--no-repair", action="store_true", help="Report only - never write overrides")
-    ap.add_argument("--canary", metavar="EMAIL", help="Member to search for in every service (default: the admin login / <KEY>_CANARY)")
+    ap.add_argument("--date", default=date.today().isoformat(), help="Asana due date the canaries are taken from (YYYY-MM-DD, default: today)")
+    ap.add_argument("--canary", metavar="EMAIL", help="Manual canary for every selected service (treated as a member; skips the Asana lookup)")
     ap.add_argument("--llm", metavar="SPEC", help="auto | openai[:model] | google[:model] | anthropic[:model] | heuristic (default: $UICHECK_LLM or auto)")
     ap.add_argument("--bench-llm", action="store_true", help="Benchmark OpenAI vs Google on the chooser prompt and store the faster one")
     ap.add_argument("--init-overrides", action="store_true", help="(Re)write uicheck/overrides.json from the code defaults, keeping live overrides")
@@ -307,7 +375,25 @@ def main() -> int:
         R.bench([p for p in ("openai", "google", "anthropic") if p in avail])
         return 0
 
-    plan = build_plan(args)
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
+        print(f"error: --date must be YYYY-MM-DD, got {args.date!r}", file=sys.stderr)
+        return 2
+
+    canaries = None
+    if not args.canary:
+        from asana_client import AsanaError
+
+        try:
+            canaries = canaries_for_date(args.date)
+        except AsanaError as e:
+            print(f"asana error: {e}", file=sys.stderr)
+            return 1
+        n = sum(len(v) for v in canaries.values())
+        print(f"asana: {n} candidate task(s) due {args.date} across {len(canaries)} service key(s)")
+
+    plan = build_plan(args, canaries)
+    for row in plan:
+        row["date"] = args.date
     if not plan:
         print("no services match the filters")
         return 0

@@ -52,7 +52,9 @@ schtasks /Delete /TN "AsanaMonitor" /F   # remove autostart
 `uicheck.py` walks every browser-based service at 03:00 (task `AsanaUICheck`),
 verifies the selectors the plugins depend on against the live admin UIs and
 repairs drift into `uicheck\overrides.json` (browser-use + Playwright
-verification; nothing is removed or invited). Install once:
+verification; nothing is removed or invited). Only services with an Asana
+"Удалить из" / "Доступ к" task due that day are checked, using that task's
+user as the search target; the rest are skipped. Install once:
 
 ```powershell
 install-uicheck-task.bat          # creates uicheck\overrides.json on first run

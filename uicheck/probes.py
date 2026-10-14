@@ -11,6 +11,13 @@ Depth (operator decision, 2026-10-13): open the row's actions menu, confirm
 the Remove/Deactivate item is there, press Escape. Confirmation dialogs are
 never opened; invite dialogs are opened, inspected and cancelled with nothing
 typed.
+
+Canary (operator decision, 2026-10-14): the person named in today's Asana
+task for that service. A "Удалить из" task gives a member -> full row/menu
+path (`ctx.has_member`). A "Доступ к" task gives someone not in the service
+yet -> only login / list / search / invite steps; the row steps are recorded
+as skipped via `ctx.require_member(...)`. No task today -> the service is not
+probed at all (decided in uicheck.py, the probe never runs).
 """
 from __future__ import annotations
 
@@ -91,16 +98,17 @@ def probe_figma(ctx: ProbeContext) -> None:
         time.sleep(1.5)
     except Exception:
         pass
-    row = ctx.check("row", CANARY_GOAL, must_contain=ctx.canary, hints=("row",))
-    kebab = ctx.check("kebab", "the row's '⋯' / more-actions menu button", scope=row, hints=("more", "options", "actions", "…"))
-    F._dismiss_in_app_overlay(page)
-    _open_menu_and_check(
-        ctx, kebab,
-        item_key="remove_item",
-        item_goal="the 'Remove' item in the opened row actions menu (presence only)",
-        hints=("remove",),
-        alt=lambda: page.get_by_role("menuitem", name=re.compile(r"^Remove\b", re.I)),
-    )
+    if ctx.require_member("row", "kebab", "remove_item"):
+        row = ctx.check("row", CANARY_GOAL, must_contain=ctx.canary, hints=("row",))
+        kebab = ctx.check("kebab", "the row's '⋯' / more-actions menu button", scope=row, hints=("more", "options", "actions", "…"))
+        F._dismiss_in_app_overlay(page)
+        _open_menu_and_check(
+            ctx, kebab,
+            item_key="remove_item",
+            item_goal="the 'Remove' item in the opened row actions menu (presence only)",
+            hints=("remove",),
+            alt=lambda: page.get_by_role("menuitem", name=re.compile(r"^Remove\b", re.I)),
+        )
 
     # Invite flow (grant.py): open the dialog, inspect, cancel.
     try:
@@ -160,14 +168,15 @@ def probe_slack(ctx: ProbeContext) -> None:
         time.sleep(1.5)
     except Exception:
         pass
-    ctx.check("row", CANARY_GOAL, must_contain=ctx.canary, hints=("row", "member"))
-    actions = ctx.check("actions_button", "the per-row 'Actions' (⋯) button of the filtered member row", hints=("actions", "more"))
-    _open_menu_and_check(
-        ctx, actions,
-        item_key="deactivate_item",
-        item_goal="the 'Deactivate account' item in the opened actions menu (presence only)",
-        hints=("deactivate",),
-    )
+    if ctx.require_member("row", "actions_button", "deactivate_item"):
+        ctx.check("row", CANARY_GOAL, must_contain=ctx.canary, hints=("row", "member"))
+        actions = ctx.check("actions_button", "the per-row 'Actions' (⋯) button of the filtered member row", hints=("actions", "more"))
+        _open_menu_and_check(
+            ctx, actions,
+            item_key="deactivate_item",
+            item_goal="the 'Deactivate account' item in the opened actions menu (presence only)",
+            hints=("deactivate",),
+        )
     ctx.skip("activate_item", "only shown for already-deactivated members - not probed", key="activate_item")
     ctx.skip("confirm_button", "confirmation dialog is never opened by the nightly check", key="confirm_button")
 
@@ -200,23 +209,24 @@ def probe_unity(ctx: ProbeContext) -> None:
     ctx.state("members_page", U._wait_for_members_page(page), "organisation members page rendered")
     U._dismiss_cookie_banner(page)
 
-    status = find_user_row(
-        page, ctx.canary,
-        extra_row_selectors=tuple(split_top_level(ctx.current("row_extra"))),
-        search_sel=ctx.current("search"),
-        row_sel=ctx.current("row"),
-    )
-    ctx.state("find_user_row", status == "found", "plugin's find_user_row locates the canary", detail=f"find_user_row -> {status}", abort=False)
     ctx.check("search", "the members list filter/search input (not the global top-bar search)", hints=("search", "filter"), abort=False)
-    row = ctx.check("row", CANARY_GOAL, must_contain=ctx.canary, extra=ctx.current("row_extra"), hints=("row", "member"))
-    kebab = ctx.check("kebab", "the row's '⋯' / more-actions menu button", scope=row, hints=("more", "options", "actions"))
-    _open_menu_and_check(
-        ctx, kebab,
-        item_key="remove_item",
-        item_goal="the 'Remove from organization' item in the opened row menu (presence only)",
-        hints=("remove from organization", "remove"),
-        alt=lambda: page.get_by_role("menuitem", name=re.compile(r"remove\s+from\s+organization", re.I)),
-    )
+    if ctx.require_member("row", "kebab", "remove_item"):
+        status = find_user_row(
+            page, ctx.canary,
+            extra_row_selectors=tuple(split_top_level(ctx.current("row_extra"))),
+            search_sel=ctx.current("search"),
+            row_sel=ctx.current("row"),
+        )
+        ctx.state("find_user_row", status == "found", "plugin's find_user_row locates the canary", detail=f"find_user_row -> {status}", abort=False)
+        row = ctx.check("row", CANARY_GOAL, must_contain=ctx.canary, extra=ctx.current("row_extra"), hints=("row", "member"))
+        kebab = ctx.check("kebab", "the row's '⋯' / more-actions menu button", scope=row, hints=("more", "options", "actions"))
+        _open_menu_and_check(
+            ctx, kebab,
+            item_key="remove_item",
+            item_goal="the 'Remove from organization' item in the opened row menu (presence only)",
+            hints=("remove from organization", "remove"),
+            alt=lambda: page.get_by_role("menuitem", name=re.compile(r"remove\s+from\s+organization", re.I)),
+        )
     ctx.skip("dialog", "confirmation dialog is never opened by the nightly check", key="dialog")
     ctx.skip("confirm_button", "confirmation dialog is never opened by the nightly check", key="confirm_button")
 
@@ -250,15 +260,16 @@ def probe_plastic_scm(ctx: ProbeContext) -> None:
         pass
     ctx.state("on_app", P._on_app(page), "users-and-groups page is on plasticscm.com")
 
-    status = find_user_row(page, ctx.canary, extra_row_selectors=(ctx.current("row"),), search_sel=ctx.current("search"))
-    ctx.state("find_user_row", status == "found", "plugin's find_user_row locates the canary", detail=f"find_user_row -> {status}", abort=False)
     ctx.check("search", "the users list search/filter input", hints=("search", "filter"), abort=False)
-    ctx.check("row", CANARY_GOAL, must_contain=ctx.canary, hints=("user-row", "row"))
-    ctx.check(
-        "delete_button",
-        "the row's red trash/delete button for this user (presence only - it fires a native confirm)",
-        hints=("delete", "remove", "trash"),
-    )
+    if ctx.require_member("row", "delete_button"):
+        status = find_user_row(page, ctx.canary, extra_row_selectors=(ctx.current("row"),), search_sel=ctx.current("search"))
+        ctx.state("find_user_row", status == "found", "plugin's find_user_row locates the canary", detail=f"find_user_row -> {status}", abort=False)
+        ctx.check("row", CANARY_GOAL, must_contain=ctx.canary, hints=("user-row", "row"))
+        ctx.check(
+            "delete_button",
+            "the row's red trash/delete button for this user (presence only - it fires a native confirm)",
+            hints=("delete", "remove", "trash"),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -290,16 +301,17 @@ def probe_skills_base(ctx: ProbeContext) -> None:
     time.sleep(0.5)
 
     ctx.check("people_search", "the 'Search people' box above the People grid", hints=("search", "people"))
-    status = K._find_person(page, ctx.canary)
-    ctx.state("find_person", status == "found", "plugin's _find_person locates the canary row", detail=f"_find_person -> {status}", abort=False)
     ctx.check("dt_info", "the DataTables info line ('Showing 1 to N of M entries')", hints=("showing", "entries"), abort=False, timeout_s=3.0)
-    row = ctx.check("row", CANARY_GOAL, must_contain=ctx.canary, extra=", ".join(ctx.current("row_extra")), hints=("row", "person"))
-    try:
-        row.hover()
-        time.sleep(0.3)
-    except Exception:
-        pass
-    ctx.check("delete_button", "the row's trash/delete control (presence only)", scope=row, hints=("delete", "trash", "remove"))
+    if ctx.require_member("row", "delete_button"):
+        status = K._find_person(page, ctx.canary)
+        ctx.state("find_person", status == "found", "plugin's _find_person locates the canary row", detail=f"_find_person -> {status}", abort=False)
+        row = ctx.check("row", CANARY_GOAL, must_contain=ctx.canary, extra=", ".join(ctx.current("row_extra")), hints=("row", "person"))
+        try:
+            row.hover()
+            time.sleep(0.3)
+        except Exception:
+            pass
+        ctx.check("delete_button", "the row's trash/delete control (presence only)", scope=row, hints=("delete", "trash", "remove"))
     ctx.skip("confirm_surface", "confirmation modal is never opened by the nightly check", key="confirm_surface")
 
 
@@ -330,17 +342,18 @@ def probe_maxon(ctx: ProbeContext) -> None:
     except Exception:
         pass
     pane = ctx.check("users_pane", "the Users tab pane (the panel holding the users table)", hints=("users",), timeout_s=8.0)
-    status = find_user_row(page, ctx.canary, search_sel=ctx.current("search"))
-    ctx.state("find_user_row", status == "found", "plugin's find_user_row locates the canary", detail=f"find_user_row -> {status}", abort=False)
     ctx.check("search", "the users table search/filter input", hints=("search", "filter"), abort=False)
-    row = ctx.check("row", CANARY_GOAL, scope=pane, must_contain=ctx.canary, hints=("row",))
-    kebab = ctx.check("kebab", "the row's '⋯' dropdown toggle (more actions)", scope=row, hints=("more", "dropdown", "toggle"))
-    _open_menu_and_check(
-        ctx, kebab,
-        item_key="remove_item",
-        item_goal="the 'Remove from team' item in the opened dropdown menu (presence only)",
-        hints=("remove from team", "remove"),
-    )
+    if ctx.require_member("row", "kebab", "remove_item"):
+        status = find_user_row(page, ctx.canary, search_sel=ctx.current("search"))
+        ctx.state("find_user_row", status == "found", "plugin's find_user_row locates the canary", detail=f"find_user_row -> {status}", abort=False)
+        row = ctx.check("row", CANARY_GOAL, scope=pane, must_contain=ctx.canary, hints=("row",))
+        kebab = ctx.check("kebab", "the row's '⋯' dropdown toggle (more actions)", scope=row, hints=("more", "dropdown", "toggle"))
+        _open_menu_and_check(
+            ctx, kebab,
+            item_key="remove_item",
+            item_goal="the 'Remove from team' item in the opened dropdown menu (presence only)",
+            hints=("remove from team", "remove"),
+        )
     ctx.skip("dialog", "confirmation dialog is never opened by the nightly check", key="dialog")
     ctx.skip("confirm_button", "confirmation dialog is never opened by the nightly check", key="confirm_button")
 
@@ -362,10 +375,10 @@ def probe_autodesk(ctx: ProbeContext) -> None:
     except Exception:
         pass
     ctx.state("admin_app", A._on_admin_app(page) and not A._on_marketing_page(page), "admin app (not the marketing page) is open")
-    status = find_user_row(page, ctx.canary, search_sel=ctx.current("search"))
-    ctx.state("find_user_row", status == "found", "plugin's find_user_row locates the canary", detail=f"find_user_row -> {status}", abort=False)
     ctx.check("search", "the users list search/filter input", hints=("search", "filter"), abort=False)
-    ctx.skip("login_email", "only exercised when the sign-in form is shown (see login step)", key="login_email")
+    if ctx.require_member("find_user_row"):
+        status = find_user_row(page, ctx.canary, search_sel=ctx.current("search"))
+        ctx.state("find_user_row", status == "found", "plugin's find_user_row locates the canary", detail=f"find_user_row -> {status}", abort=False)
 
 
 # ---------------------------------------------------------------------------

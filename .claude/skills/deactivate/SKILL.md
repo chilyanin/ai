@@ -90,7 +90,7 @@ description: Оффбординг через Asana-задачи «Удалить
 
 Профили браузера между ОС не переносятся, на новой машине сессии праймятся заново через `prime_session.py`.
 
-Селекторы плагинов живут в `uicheck/overrides.json` (читаются через `services/_selectors.py: sel()`); каждую ночь в 03:00 задача `AsanaUICheck` (`uicheck.py --yes --headless`) проверяет их на живых сервисах и чинит дрифт. Если плагин упал с `failed: …`, сначала открой `uicheck/reports/latest.md`: там видно, какой шаг сломался и был ли записан override. Подробности в [references/uicheck.md](references/uicheck.md).
+Селекторы плагинов живут в `uicheck/overrides.json` (читаются через `services/_selectors.py: sel()`); каждую ночь в 03:00 задача `AsanaUICheck` (`uicheck.py --yes --headless`) проверяет их на живых сервисах и чинит дрифт. Проверяются только сервисы, у которых на эту дату есть задача «Удалить из» / «Доступ к»; канарейка — пользователь из задачи. Если плагин упал с `failed: …`, сначала открой `uicheck/reports/latest.md`: там видно, какой шаг сломался и был ли записан override. Подробности в [references/uicheck.md](references/uicheck.md).
 
 ## Секреты
 

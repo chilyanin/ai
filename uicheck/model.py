@@ -58,7 +58,16 @@ class StepResult:
 
 
 class ProbeAbort(Exception):
-    """Raised when a step fails in a way that makes the following steps moot."""
+    """Raised when a step fails in a way that makes the following steps moot.
+
+    `soft=True` means nothing is broken - the canary just is not in the
+    service (already removed, or the Asana task names a different address),
+    so the member-row steps were skipped rather than failed.
+    """
+
+    def __init__(self, msg: str, *, soft: bool = False):
+        super().__init__(msg)
+        self.soft = soft
 
 
 @dataclass
@@ -69,6 +78,12 @@ class ProbeContext:
     context: Any                 # Playwright BrowserContext
     creds: dict
     canary: str
+    # "deactivate": the canary is a member being offboarded today -> the full
+    #   row / menu / remove-item path is probed.
+    # "grant": the canary is being invited today and is NOT in the service
+    #   yet -> only login / list / search / invite steps run.
+    canary_kind: str = "deactivate"
+    date: str = ""
     sel_slug: str | None = None  # registry slug when it differs from `slug`
     repairer: Any = None         # uicheck.repair.Repairer or None
     fp_store: Any = None         # uicheck.fingerprint.Store or None
@@ -236,6 +251,13 @@ class ProbeContext:
             return first
 
         # ---- failure path ------------------------------------------------
+        # A row check whose text is nowhere on the page is not UI drift: the
+        # canary simply is not listed (removed earlier, different address).
+        if must_contain and not self._body_has(must_contain):
+            r = StepResult(self.service, step, "skipped", f"canary {must_contain} not present in the list (user-not-found) - not a selector problem", key=key, selector=css, screenshot=self._shot(step), duration=time.time() - t0)
+            self._record(r)
+            raise ProbeAbort(f"{step}: canary not listed", soft=True)
+
         shot = self._shot(step)
         detail = f"no match for {css!r}"
 
@@ -358,6 +380,28 @@ class ProbeContext:
             return self.page.title()
         except Exception:
             return ""
+
+    def _body_has(self, text: str) -> bool:
+        try:
+            return text.lower() in self.page.locator("body").inner_text(timeout=3_000).lower()
+        except Exception:
+            return False
+
+    @property
+    def has_member(self) -> bool:
+        return self.canary_kind == "deactivate"
+
+    def require_member(self, *keys: str) -> bool:
+        """True if the member-row path may run; otherwise skip `keys` and return False."""
+        if self.has_member:
+            return True
+        reason = (
+            f"no 'Удалить из' task for {self.date or 'today'} - canary {self.canary} comes from a "
+            "'Доступ к' task and is not in the service yet; member-row steps skipped"
+        )
+        for k in keys:
+            self.skip(k, reason, key=k)
+        return False
 
     def state(self, step: str, ok: bool, goal: str, *, detail: str = "", abort: bool = True) -> bool:
         """Record a non-selector condition (login landed, list rendered, ...)."""
